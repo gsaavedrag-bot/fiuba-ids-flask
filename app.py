@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask
 from routes.deportes_routes import deportes_bp
 from routes.canchas_routes import canchas_bp

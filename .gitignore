@@ -1,0 +1,25 @@
+# Entornos virtuales (pesados y locales a cada máquina)
+.venv/
+venv/
+ENV/
+env/
+
+# Variables de entorno y credenciales (seguridad)
+.env
+*.env
+
+# Archivos de caché y bytecode compilado de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configuración local del IDE (PyCharm / JetBrains)
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Base de datos local o volcados de logs temporales
+*.log
+*.sqlite3

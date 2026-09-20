@@ -10,7 +10,7 @@ def get_connection():
         port=int(os.getenv('MYSQL_PORT', 3306)),
         user=os.getenv('MYSQL_USER', 'root'),
         password=os.getenv('MYSQL_PASSWORD', ''),
-        database=os.getenv('MYSQL_DATABASE', 'club_encuentro')
+        database=os.getenv('MYSQL_DATABASE', 'club_deportivo')
     )
 
 def execute(query: str, params: tuple = None):

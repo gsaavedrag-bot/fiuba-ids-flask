@@ -1,5 +1,11 @@
 from db import execute
 
 def listar_deportes_db():
-    query = "SELECT id, nombre FROM deportes ORDER BY id ASC;"
+    query = """
+        SELECT 
+            id_deporte AS id,
+            nombre
+        FROM deportes
+        ORDER BY id_deporte ASC;
+    """
     return execute(query)

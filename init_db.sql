@@ -26,14 +26,14 @@ CREATE TABLE IF NOT EXISTS socios (
 );
 
 CREATE TABLE IF NOT EXISTS reservas (
-    id_reserva INT AUTO_INCREMENT PRIMARY KEY,
-    fecha DATE NOT NULL,
-    hora_inicio TIME NOT NULL,
-    hora_final DATETIME NOT NULL,
+    id INT AUTO_INCREMENT PRIMARY KEY,
     id_cancha INT NOT NULL,
     id_socio INT NOT NULL,
-    precio_total INT NOT NULL,
-    estado BOOLEAN DEFAULT FALSE,
+    fecha_hora_inicio DATETIME(6) NOT NULL,
+    fecha_hora_fin DATETIME(6) NOT NULL,
+    estado ENUM('confirmada', 'cancelada', 'finalizada') NOT NULL DEFAULT 'confirmada',
+    tarifa_historica INT NOT NULL,
+    total INT NOT NULL,
     FOREIGN KEY (id_cancha) REFERENCES canchas(id_cancha),
     FOREIGN KEY (id_socio) REFERENCES socios(id_socio)
 );

@@ -43,7 +43,7 @@ def _construir_hateoas(base_url: str, limit: int, offset: int, total: int, query
 
 
 def listar_reservas_controller():
-    """Devuelve en JSON las reservas paginadas con filtros (Issue #12)."""
+    """Devuelve en JSON las reservas paginadas con filtros."""
     # 1. Validación de paginación
     try:
         limit = int(request.args.get("_limit", 10))
@@ -56,10 +56,12 @@ def listar_reservas_controller():
     # 2. Parseo de filtros de consulta
     filtros = {}
     try:
-        if "id_cancha" in request.args:
-            filtros["id_cancha"] = int(request.args.get("id_cancha"))
-        if "id_socio" in request.args:
-            filtros["id_socio"] = int(request.args.get("id_socio"))
+        id_cancha = request.args.get("id_cancha")
+        if id_cancha is not None:
+            filtros["id_cancha"] = int(id_cancha)
+        id_socio = request.args.get("id_socio")
+        if id_socio is not None:
+            filtros["id_socio"] = int(id_socio)
     except ValueError:
         return ERRORS["INVALID_FORMAT"]("id_cancha e id_socio deben ser enteros.")
 
@@ -89,7 +91,7 @@ def listar_reservas_controller():
 
 
 def obtener_reserva_controller(reserva_id):
-    """Devuelve el detalle de una reserva o 404 Not Found (Issue #12)."""
+    """Devuelve el detalle de una reserva o 404 Not Found."""
     reserva = obtener_reserva_por_id_db(reserva_id)
     if not reserva:
         return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {reserva_id}.")
@@ -99,12 +101,12 @@ def obtener_reserva_controller(reserva_id):
 def actualizar_estado_controller(reserva_id):
     """Cambia el estado de la reserva validando las transiciones permitidas (Issue #12)."""
     data = request.get_json(silent=True)
-    if not data or "estado" not in data:
+    if not isinstance(data, dict) or "estado" not in data:
         return ERRORS["MISSING_REQUIRED_FIELDS"]("El campo 'estado' es obligatorio.")
 
     nuevo_estado = data.get("estado")
     estados_validos = ["confirmada", "cancelada", "finalizada"]
-    if nuevo_estado not in estados_validos:
+    if not isinstance(nuevo_estado, str) or nuevo_estado not in estados_validos:
         return ERRORS["INVALID_FORMAT"](f"Estado no reconocido: '{nuevo_estado}'.")
 
     reserva = obtener_reserva_por_id_db(reserva_id)
@@ -119,8 +121,15 @@ def actualizar_estado_controller(reserva_id):
 
     # Validaciones temporales de transición
     ahora = datetime.now(TZ_ARG)
-    inicio = datetime.fromisoformat(reserva["fecha_hora_inicio"])
-    fin = datetime.fromisoformat(reserva["fecha_hora_fin"])
+    inicio_raw = reserva.get("fecha_hora_inicio")
+    fin_raw = reserva.get("fecha_hora_fin")
+    if not isinstance(inicio_raw, str) or not isinstance(fin_raw, str):
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Las fechas de la reserva no tienen un formato válido.")
+    try:
+        inicio = datetime.fromisoformat(inicio_raw)
+        fin = datetime.fromisoformat(fin_raw)
+    except ValueError:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Las fechas de la reserva no tienen un formato válido.")
 
     if estado_actual == "confirmada":
         if nuevo_estado == "cancelada":
@@ -144,7 +153,7 @@ def actualizar_estado_controller(reserva_id):
 
 
 def crear_reserva_controller():
-    """Valida que llegue un cuerpo JSON y delega la creación (Módulo Alumno 6)."""
+    """Válida que llegue un cuerpo JSON y delega la creación (Módulo)."""
     data = request.get_json(silent=True) or {}
 
     if not data:

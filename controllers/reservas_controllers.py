@@ -88,15 +88,15 @@ def listar_reservas_controller():
     return jsonify({"reservas": reservas, "_links": links}), 200
 
 
-def obtener_reserva_controller(id):
+def obtener_reserva_controller(reserva_id):
     """Devuelve el detalle de una reserva o 404 Not Found (Issue #12)."""
-    reserva = obtener_reserva_por_id_db(id)
+    reserva = obtener_reserva_por_id_db(reserva_id)
     if not reserva:
-        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {id}.")
+        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {reserva_id}.")
     return jsonify(reserva), 200
 
 
-def actualizar_estado_controller(id):
+def actualizar_estado_controller(reserva_id):
     """Cambia el estado de la reserva validando las transiciones permitidas (Issue #12)."""
     data = request.get_json(silent=True)
     if not data or "estado" not in data:
@@ -107,9 +107,9 @@ def actualizar_estado_controller(id):
     if nuevo_estado not in estados_validos:
         return ERRORS["INVALID_FORMAT"](f"Estado no reconocido: '{nuevo_estado}'.")
 
-    reserva = obtener_reserva_por_id_db(id)
+    reserva = obtener_reserva_por_id_db(reserva_id)
     if not reserva:
-        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {id}.")
+        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {reserva_id}.")
 
     estado_actual = reserva["estado"]
 
@@ -135,7 +135,7 @@ def actualizar_estado_controller(id):
         # Ni 'cancelada' ni 'finalizada' admiten nuevas transiciones
         return ERRORS["CONFLICT"](f"No se permite modificar una reserva en estado '{estado_actual}'.")
 
-    filas_afectadas = actualizar_estado_reserva_db(id, nuevo_estado)
+    filas_afectadas = actualizar_estado_reserva_db(reserva_id, nuevo_estado)
     if filas_afectadas is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo actualizar el estado de la reserva.")
 

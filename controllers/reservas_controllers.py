@@ -54,7 +54,7 @@ def listar_reservas_controller():
         return ERRORS["INVALID_FORMAT"]("_limit y _offset deben ser enteros.")
 
     # 2. Parseo de filtros de consulta
-    filtros = {}
+    filtros: dict[str, int | str] = {}
     try:
         id_cancha = request.args.get("id_cancha")
         if id_cancha is not None:
@@ -71,12 +71,17 @@ def listar_reservas_controller():
             return ERRORS["INVALID_FORMAT"](f"Estado desconocido: {estado}")
         filtros["estado"] = estado
 
-    if "fecha_desde" in request.args:
-        filtros["fecha_desde"] = request.args.get("fecha_desde")
-    if "fecha_hasta" in request.args:
-        filtros["fecha_hasta"] = request.args.get("fecha_hasta")
+    fecha_desde = request.args.get("fecha_desde")
+    if fecha_desde is not None:
+        filtros["fecha_desde"] = fecha_desde
+    fecha_hasta = request.args.get("fecha_hasta")
+    if fecha_hasta is not None:
+        filtros["fecha_hasta"] = fecha_hasta
 
     total = contar_reservas_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al contar reservas en la base de datos.")
+
     reservas = obtener_reservas_db(filtros=filtros, limit=limit, offset=offset)
 
     if reservas is None:

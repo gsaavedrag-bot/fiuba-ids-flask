@@ -13,7 +13,7 @@ API REST desarrollada en **Python** y **Flask** para centralizar y automatizar l
 ## 👥 Integrantes
 
 | Nombre y Apellido | Padrón |
-| :--- | :--- |
+| Martin simajowich | 106935 |
 | Gabriel Alexander Saavedra Gutierrez | 114419 |
 | Federico Albarracín | 116268 |
 | Nicole Gomez | 112221 |

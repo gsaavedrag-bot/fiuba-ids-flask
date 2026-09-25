@@ -8,7 +8,6 @@ from routes.reservas_routes import reservas_bp
 
 app = Flask(__name__)
 
-# Prefijos definidos en swagger.yaml
 app.register_blueprint(deportes_bp, url_prefix='/deportes')
 app.register_blueprint(canchas_bp, url_prefix='/canchas')
 app.register_blueprint(socios_bp, url_prefix='/socios')

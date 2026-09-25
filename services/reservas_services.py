@@ -122,5 +122,4 @@ def actualizar_estado_reserva_db(
 
 
 def crear_reserva_db(_datos: dict[str, Any]) -> bool:
-    """Indica que la creación aún no está implementada."""
     return False

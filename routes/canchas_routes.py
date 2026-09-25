@@ -6,9 +6,10 @@ from controllers.canchas_controllers import (
     crear_cancha_controller
 )
 
+# Blueprint para agrupar los endpoints de canchas.
 canchas_bp = Blueprint('canchas_bp', __name__)
 
-# Mapeo de rutas a las funciones del controller
+# GET lista las canchas y POST recibe los datos de una nueva cancha.
 @canchas_bp.route('/', methods=['GET'])
 def listar():
     return listar_canchas_controller()

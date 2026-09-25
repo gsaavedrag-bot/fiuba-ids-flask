@@ -2,10 +2,8 @@ import os
 import mysql.connector
 from dotenv import load_dotenv
 
-# Carga de variables de entorno desde el .env
 load_dotenv()
 
-# Diccionario centralizado de configuración de conexión
 db_config = {
     'host': os.getenv('MYSQL_HOST', 'localhost'),
     'port': int(os.getenv('MYSQL_PORT', 3306)),
@@ -16,16 +14,15 @@ db_config = {
 
 
 def get_connection():
-    """Establece la conexión usando desempaquetado de diccionario (kwargs)."""
+    """Abre una conexión MySQL usando la configuración centralizada."""
     return mysql.connector.connect(**db_config)
 
 
 def execute(query: str, params: tuple = None):
     """
-    Ejecuta sentencias SQL de forma segura y maneja el ciclo de vida de la conexión:
-    - SELECT: retorna lista de diccionarios (cursor.fetchall()).
-    - INSERT: aplica commit y retorna el ID autogenerado (cursor.lastrowid).
-    - UPDATE / DELETE: aplica commit y retorna las filas afectadas (cursor.rowcount).
+    Ejecuta SQL parametrizado y devuelve el resultado según el tipo de consulta:
+    SELECT devuelve filas como diccionarios; INSERT devuelve el ID generado;
+    otras instrucciones confirman los cambios y devuelven las filas afectadas.
     """
     conn = None
     cursor = None

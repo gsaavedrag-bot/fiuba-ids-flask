@@ -6,6 +6,6 @@ def listar_deportes_db():
             id_deporte AS id,
             nombre
         FROM deportes
-        ORDER BY id_deporte ASC;
+        ORDER BY id_deporte;
     """
     return execute(query)

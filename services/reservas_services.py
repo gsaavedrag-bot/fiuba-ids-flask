@@ -121,5 +121,75 @@ def actualizar_estado_reserva_db(
     return resultado if isinstance(resultado, int) else None
 
 
-def crear_reserva_db(_datos: dict[str, Any]) -> bool:
-    return False
+def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
+    id_socio = datos.get("id_socio")
+    id_cancha = datos.get("id_cancha")
+    inicio_iso = datos.get("fecha_hora_inicio")
+    fin_iso = datos.get("fecha_hora_fin")
+
+    # 1. Validar existencia y estado del socio
+    query_socio = "SELECT id_socio, estado FROM socios WHERE id_socio = %s;"
+    socio_res = execute(query_socio, (id_socio,))
+    if not socio_res:
+        return None, "SOCIO_NOT_FOUND"
+    if not socio_res[0]["estado"]:
+        return None, "SOCIO_INACTIVE"
+
+    # 2. Validar existencia y estado de la cancha
+    query_cancha = "SELECT id_cancha, precio_hora, activa FROM canchas WHERE id_cancha = %s;"
+    cancha_res = execute(query_cancha, (id_cancha,))
+    if not cancha_res:
+        return None, "CANCHA_NOT_FOUND"
+    cancha = cancha_res[0]
+    if not cancha["activa"]:
+        return None, "CANCHA_INACTIVE"
+
+    # 3. Validar solapamiento de cancha (reservas confirmadas)
+    query_cancha_solapada = """
+        SELECT COUNT(*) AS total FROM reservas
+        WHERE id_cancha = %s AND estado = 'confirmada'
+          AND fecha_hora_inicio < %s AND fecha_hora_fin > %s;
+    """
+    res_solapada = execute(query_cancha_solapada,
+                           (id_cancha, fin_iso, inicio_iso))
+    if res_solapada and res_solapada[0]["total"] > 0:
+        return None, "OVERLAP_CANCHA"
+
+    # 4. Validar solapamiento de socio (reservas confirmadas)
+    query_socio_solapado = """
+        SELECT COUNT(*) AS total FROM reservas
+        WHERE id_socio = %s AND estado = 'confirmada'
+          AND fecha_hora_inicio < %s AND fecha_hora_fin > %s;
+    """
+    res_socio = execute(query_socio_solapado, (id_socio, fin_iso, inicio_iso))
+    if res_socio and res_socio[0]["total"] > 0:
+        return None, "OVERLAP_SOCIO"
+
+    # 5. Cálculo de importe y congelamiento de tarifa
+    dt_inicio = datetime.fromisoformat(inicio_iso)
+    dt_fin = datetime.fromisoformat(fin_iso)
+    duracion_horas = int((dt_fin - dt_inicio).total_seconds() // 3600)
+    precio_hora = cancha["precio_hora"]
+    total = duracion_horas * precio_hora
+
+    # 6. Inserción
+    query_insert = """
+        INSERT INTO reservas (id_cancha, id_socio, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica, total)
+        VALUES (%s, %s, %s, %s, 'confirmada', %s, %s);
+    """
+    nuevo_id = execute(query_insert, (id_cancha, id_socio,
+                       inicio_iso, fin_iso, precio_hora, total))
+    if not nuevo_id:
+        return None, "DB_ERROR"
+
+    reserva_creada = {
+        "id": nuevo_id,
+        "id_socio": id_socio,
+        "id_cancha": id_cancha,
+        "fecha_hora_inicio": parsear_fecha_iso(inicio_iso),
+        "fecha_hora_fin": parsear_fecha_iso(fin_iso),
+        "estado": "confirmada",
+        "precio_hora": precio_hora,
+        "precio_total": total
+    }
+    return reserva_creada, None

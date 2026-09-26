@@ -158,14 +158,54 @@ def actualizar_estado_controller(reserva_id):
 
 
 def crear_reserva_controller():
-    """Válida que llegue un cuerpo JSON y delega la creación (Módulo)."""
     data = request.get_json(silent=True) or {}
+    requeridos = ["id_socio", "id_cancha",
+                  "fecha_hora_inicio", "fecha_hora_fin"]
 
-    if not data:
-        return ERRORS["MISSING_REQUIRED_FIELDS"]("No se recibieron datos en la solicitud.")
+    if not all(k in data for k in requeridos):
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("Faltan campos obligatorios (id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin).")
 
-    ok = crear_reserva_db(data)
-    if not ok:
-        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo crear la reserva.")
+    inicio_str = data["fecha_hora_inicio"]
+    fin_str = data["fecha_hora_fin"]
 
-    return jsonify({"mensaje": "Reserva creada correctamente"}), 201
+    try:
+        inicio = datetime.fromisoformat(inicio_str)
+        fin = datetime.fromisoformat(fin_str)
+    except ValueError:
+        return ERRORS["INVALID_FORMAT"]("Formato de fecha inválido. Se espera ISO 8601 con zona horaria.")
+
+    ahora = datetime.now(TZ_ARG)
+    if inicio <= ahora:
+        return ERRORS["CONFLICT"]("La reserva debe comenzar en el futuro.")
+
+    if inicio >= fin:
+        return ERRORS["INVALID_FORMAT"]("fecha_hora_inicio debe ser menor a fecha_hora_fin.")
+
+    if inicio.minute != 0 or fin.minute != 0:
+        return ERRORS["INVALID_FORMAT"]("Las reservas deben iniciar y finalizar en horas en punto.")
+
+    duracion_horas = (fin - inicio).total_seconds() / 3600
+    if duracion_horas < 1 or duracion_horas > 3:
+        return ERRORS["CONFLICT"]("La duración debe ser de entre 1 y 3 horas completas.")
+
+    if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
+        return ERRORS["CONFLICT"]("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+
+    reserva, error = crear_reserva_db(data)
+
+    if error == "SOCIO_NOT_FOUND":
+        return ERRORS["NOT_FOUND"](f"No existe el socio con id {data['id_socio']}.")
+    if error == "SOCIO_INACTIVE":
+        return ERRORS["CONFLICT"]("El socio se encuentra inactivo.")
+    if error == "CANCHA_NOT_FOUND":
+        return ERRORS["NOT_FOUND"](f"No existe la cancha con id {data['id_cancha']}.")
+    if error == "CANCHA_INACTIVE":
+        return ERRORS["CONFLICT"]("La cancha se encuentra inactiva.")
+    if error == "OVERLAP_CANCHA":
+        return ERRORS["CONFLICT"]("La cancha ya tiene una reserva confirmada en ese intervalo.")
+    if error == "OVERLAP_SOCIO":
+        return ERRORS["CONFLICT"]("El socio ya tiene una reserva confirmada en ese intervalo.")
+    if error == "DB_ERROR" or not reserva:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo registrar la reserva en la base de datos.")
+
+    return jsonify(reserva), 201

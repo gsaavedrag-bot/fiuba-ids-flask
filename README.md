@@ -1,12 +1,6 @@
-# fiuba-ids-flask
+# ⚽ Sistema de Reservas - Club Deportivo Encuentro
 
 Trabajo práctico de backend para la materia **"Introducción al Desarrollo de Software"** — Facultad de Ingeniería de la Universidad de Buenos Aires (FIUBA).
-
----
-
-## ⚽ Sistema de Reservas - Club Deportivo Encuentro
-
-API REST desarrollada en **Python** y **Flask** para centralizar y automatizar la administración y reserva de turnos para canchas de fútbol, tenis y pádel, garantizando la consistencia temporal de las operaciones y la integridad de las tarifas.
 
 ---
 
@@ -61,113 +55,99 @@ fiuba-ids-flask/
 ├── controllers/           # Validación de peticiones y respuestas HTTP
 └── services/              # Lógica de negocio y consultas SQL parametrizadas
 ```
+
+---
+
 ## ⚙️ Instalación y Puesta en Marcha
 
-Ejecutar los siguientes pasos en la terminal desde el directorio raíz del proyecto:
+Sigue estos pasos en la terminal desde el directorio raíz del proyecto para levantar la aplicación:
 
-## 1. Clonar el repositorio y configurar variables de entorno
+### 1. Configurar Variables de Entorno
 
-Bash:
+Clona la plantilla de variables de entorno y edítala con tus credenciales locales de MySQL:
 
-```text
+```bash
 cp .env.example .env
 ```
 
-Editar el archivo .env local asignando las credenciales correspondientes a su servidor MySQL (este archivo no se versiona en Git).
+> **Nota:** No olvides asignar las credenciales correspondientes a tu servidor local de MySQL en el archivo `.env` recién creado. Este archivo está excluido del control de versiones.
 
-## 2. Crear y activar el entorno virtual
-En Linux / macOS:
+### 2. Crear y Activar el Entorno Virtual
 
-Bash:
+- **Linux / macOS:**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
 
-```text
-python3 -m venv .venv
-source .venv/bin/activate
-```
+- **Windows (CMD o PowerShell):**
+  ```cmd
+  python -m venv .venv
+  .venv\Scripts\activate
+  ```
 
-## En Windows:
+### 3. Instalar Dependencias
 
-Bash
+Actualiza `pip` e instala los paquetes requeridos:
 
-```text
-python -m venv .venv
-.venv\Scripts\activate
-```
-
-## 3. Instalar las dependencias
-Bash
-
-```text
+```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## 4. Inicializar la base de datos
+### 4. Inicializar la Base de Datos
 
-Ejecutar el script SQL para crear la estructura relacional de club_deportivo e insertar los deportes precargados:
+Ejecuta el script SQL para crear la base de datos `club_deportivo`, estructurar las tablas e insertar los deportes precargados:
 
-Bash
-
-```text
+```bash
 mysql -u root -p < init_db.sql
 ```
 
-## 5. Iniciar la API
-Bash
+### 5. Iniciar la API
 
-```text
+Corre el servidor de Flask:
+
+```bash
 python3 app.py
 ```
 
-El servidor quedará disponible por defecto en: http://localhost:5000 (o en el puerto definido en FLASK_PORT).
+El servidor quedará disponible por defecto en: [http://localhost:5000](http://localhost:5000) (o en el puerto definido por `FLASK_PORT` en tu `.env`).
 
 ---
 
 ## 📋 Supuestos y Reglas de Negocio
-Manejo Horario y Estándar Temporal:
 
-Todas las fechas y horas se procesan bajo el estándar ISO 8601 con zona horaria oficial GMT-3 (YYYY-MM-DDTHH:MM:SS-03:00).
+### 🕒 Manejo Horario y Estándar Temporal
+* **Estándar:** Todas las fechas y horas se procesan bajo el estándar **ISO 8601** con zona horaria oficial GMT-3 (`YYYY-MM-DDTHH:MM:SS-03:00`).
+* **Operación:** El club opera únicamente de **08:00 a 23:00**.
+* **Turnos:** Los turnos se reservan en horas en punto con una duración de **1 a 3 horas completas**.
 
-El club opera de 08:00 a 23:00. Los turnos se reservan en horas en punto (duración de 1 a 3 horas completas).
+### 💵 Tarifas y Moneda
+* **Consistencia:** Todos los precios se gestionan y persisten como **números enteros en centavos** para evitar inconsistencias de redondeo con coma flotante.
+* **Congelamiento de Tarifa:** La reserva congela la tarifa horaria vigente al momento de su creación. Modificaciones futuras en la tarifa de la cancha no alterarán las reservas preexistentes.
 
-Tarifas y Moneda:
-
-Todos los precios se gestionan y persisten como números enteros que representan centavos para evitar inconsistencias de redondeo en coma flotante.
-
-La reserva congela la tarifa horaria vigente al momento de su creación. Modificaciones futuras en la cancha no alteran reservas existentes.
-
-Políticas de Integridad y Estados:
-
-No se permite eliminar físicamente una cancha que posea reservas históricas o activas (responde 409 Conflict). En su lugar, se realiza una baja lógica desactivándola.
-
-La cancelación (cancelada) solo es válida antes de que comience el horario de inicio del turno.
-
-La finalización (finalizada) únicamente puede aplicarse una vez transcurrido el horario de finalización.
+### 🔒 Políticas de Integridad y Estados
+* **Baja Lógica de Canchas:** No se permite eliminar físicamente una cancha que posea reservas históricas o activas (retorna `409 Conflict`). En su lugar, se realiza una baja lógica desactivándola.
+* **Cancelaciones:** La cancelación (`cancelada`) solo es válida antes del horario de inicio del turno.
+* **Finalización:** El cambio de estado a `finalizada` únicamente puede aplicarse una vez transcurrido el horario de finalización del turno.
 
 ---
 
 ## 🧪 Ejemplos de Solicitudes (cURL)
-Listar deportes precargados:
 
-Bash
-
-```text
+### Listar deportes precargados
+```bash
 curl -X GET http://localhost:5000/deportes
 ```
 
-## Crear un nuevo socio:
-
-Bash
-
-```text
+### Crear un nuevo socio
+```bash
 curl -X POST http://localhost:5000/socios \
   -H "Content-Type: application/json" \
   -d '{"nombre": "Carlos Tevez", "email": "carlos.tevez@club.com"}'
 ```
 
-## Consultar reservas paginadas con filtros:
-
-Bash:
-```text
+### Consultar reservas paginadas con filtros
+```bash
 curl -X GET "http://localhost:5000/reservas?estado=confirmada&_limit=5&_offset=0"
 ```

@@ -1,0 +1,1548 @@
+================================================================================
+  PROYECTO: FIUBA-IDS-FLASK (Club Deportivo - API REST con Flask + MySQL)
+  Estructura de Directorios y Codigo Fuente Completo (ACTUALIZADO)
+================================================================================
+
+--------------------------------------------------------------------------------
+ESQUEMA DE DIRECTORIOS
+--------------------------------------------------------------------------------
+
+fiuba-ids-flask/
+│
+├── app.py                          # Aplicación principal Flask (registro de Blueprints)
+├── db.py                           # Configuración y conexión a MySQL
+├── init_db.sql                     # Script de creación de base de datos y tablas
+├── errors.py                       # Definición de respuestas de error (ERRORS)
+├── helpers.py                      # Utilidades auxiliares (paginación, HATEOAS, validaciones)
+├── requirements.txt                # Dependencias Python
+├── README.md                       # Documentación del proyecto
+├── swagger.yaml                    # Especificación de API (OpenAPI 3.0)
+├── .env                            # Variables de entorno (configuración local)
+├── .env.example                    # Ejemplo de variables de entorno
+├── .gitignore                      # Archivos ignorados por Git
+├── Enunciado - Estudiantes.pdf     # Enunciado del trabajo práctico
+│
+├── controllers/                    # Capa de controladores (lógica de negocio HTTP)
+│   ├── __pycache__/
+│   ├── canchas_controllers.py      # Controlador de canchas
+│   ├── reservas_controllers.py     # Controlador de reservas
+│   ├── socios_controllers.py       # Controlador de socios (incluye PATCH/actualizar)
+│   └── deportes_controllers.py     # Controlador de deportes
+│
+├── routes/                         # Definición de rutas (Blueprints de Flask)
+│   ├── __pycache__/
+│   ├── canchas_routes.py           # Rutas de canchas
+│   ├── reservas_routes.py          # Rutas de reservas
+│   ├── socios_routes.py            # Rutas de socios (incluye PATCH /socios/{id})
+│   └── deportes_routes.py          # Rutas de deportes
+│
+└── services/                       # Capa de servicios (acceso a datos / lógica SQL)
+    ├── __pycache__/
+    ├── canchas_services.py         # Servicio de canchas
+    ├── reservas_services.py        # Servicio de reservas
+    ├── socios_services.py          # Servicio de socios (incluye obtener_por_id, por_email, actualizar)
+    └── deportes_services.py        # Servicio de deportes
+
+--------------------------------------------------------------------------------
+ARCHIVO: app.py
+--------------------------------------------------------------------------------
+
+import os
+
+from flask import Flask
+from routes.deportes_routes import deportes_bp
+from routes.canchas_routes import canchas_bp
+from routes.socios_routes import socios_bp
+from routes.reservas_routes import reservas_bp
+
+app = Flask(__name__)
+
+app.register_blueprint(deportes_bp, url_prefix='/deportes')
+app.register_blueprint(canchas_bp, url_prefix='/canchas')
+app.register_blueprint(socios_bp, url_prefix='/socios')
+app.register_blueprint(reservas_bp, url_prefix='/reservas')
+
+if __name__ == '__main__':
+    port = int(os.getenv('FLASK_PORT', 5000))
+    if os.getenv('ENV') == 'dev':
+        app.run(debug=True, port=port)
+    else:
+        app.run(debug=False, host='0.0.0.0', port=port)
+
+--------------------------------------------------------------------------------
+ARCHIVO: db.py
+--------------------------------------------------------------------------------
+
+import os
+import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()
+
+db_config = {
+    'host': os.getenv('MYSQL_HOST', 'localhost'),
+    'port': int(os.getenv('MYSQL_PORT', 3306)),
+    'user': os.getenv('MYSQL_USER', 'root'),
+    'password': os.getenv('MYSQL_PASSWORD', ''),
+    'database': os.getenv('MYSQL_DATABASE', 'club_deportivo')
+}
+
+
+def get_connection():
+    """Abre una conexión MySQL usando la configuración centralizada."""
+    return mysql.connector.connect(**db_config)
+
+
+def execute(query: str, params: tuple = None):
+    """
+    Ejecuta SQL parametrizado y devuelve el resultado según el tipo de consulta:
+    SELECT devuelve filas como diccionarios; INSERT devuelve el ID generado;
+    otras instrucciones confirman los cambios y devuelven las filas afectadas.
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(query, params or ())
+
+        instruccion = query.strip().upper()
+        if instruccion.startswith("SELECT"):
+            result = cursor.fetchall()
+        elif instruccion.startswith("INSERT"):
+            conn.commit()
+            result = cursor.lastrowid
+        else:
+            conn.commit()
+            result = cursor.rowcount
+
+        return result
+
+    except mysql.connector.Error as err:
+        print(f"Error de base de datos: {err}")
+        return None
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+--------------------------------------------------------------------------------
+ARCHIVO: init_db.sql
+--------------------------------------------------------------------------------
+
+CREATE DATABASE IF NOT EXISTS club_deportivo;
+USE club_deportivo;
+
+CREATE TABLE IF NOT EXISTS deportes (
+    id_deporte INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR (50) NOT NULL,
+    cantidad_jugadores INT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS canchas (
+    id_cancha INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    id_deporte INT NOT NULL,
+    precio_hora INT NOT NULL,
+    techada BOOLEAN DEFAULT FALSE,
+    activa BOOLEAN DEFAULT TRUE,
+    precio_reserva INT NOT NULL,
+    FOREIGN KEY (id_deporte) REFERENCES deportes(id_deporte)
+);
+
+CREATE TABLE IF NOT EXISTS socios (
+    id_socio INT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(50) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    estado BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS reservas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    id_cancha INT NOT NULL,
+    id_socio INT NOT NULL,
+    fecha_hora_inicio DATETIME(6) NOT NULL,
+    fecha_hora_fin DATETIME(6) NOT NULL,
+    estado ENUM('confirmada', 'cancelada', 'finalizada') NOT NULL DEFAULT 'confirmada',
+    tarifa_historica INT NOT NULL,
+    total INT NOT NULL,
+    FOREIGN KEY (id_cancha) REFERENCES canchas(id_cancha),
+    FOREIGN KEY (id_socio) REFERENCES socios(id_socio)
+);
+
+--------------------------------------------------------------------------------
+ARCHIVO: errors.py
+--------------------------------------------------------------------------------
+
+from flask import jsonify
+
+
+def build_error_response(code: int, message: str, description: str):
+    """
+    Construye la tupla (Response, HTTP_STATUS) respetando
+    el schema 'Errores' exigido en swagger.yaml.
+    """
+    response = {
+        "errors": [
+            {
+                "code": code,
+                "message": message,
+                "level": "error",
+                "description": description
+            }
+        ]
+    }
+    return jsonify(response), code
+
+
+# Mapeo uniforme para invocar directamente desde los controllers
+ERRORS = {
+    # 400 Bad Request
+    "MISSING_REQUIRED_FIELDS": lambda msg="Faltan campos obligatorios": build_error_response(
+        400, msg, "La solicitud no contiene todos los campos obligatorios."
+    ),
+    "INVALID_FORMAT": lambda msg="Formato de datos inválido": build_error_response(
+        400, msg, "Los tipos o formatos de los datos proporcionados son incorrectos."
+    ),
+
+    # 404 Not Found
+    "NOT_FOUND": lambda msg="Recurso no encontrado": build_error_response(
+        404, msg, "El recurso solicitado no existe en la base de datos."
+    ),
+
+    # 409 Conflict (Emails repetidos, transiciones de estado inválidas, solapamientos)
+    "CONFLICT": lambda msg="Conflicto de negocio": build_error_response(
+        409, msg, "La operación no pudo completarse debido a un conflicto de estado o registros existentes."
+    ),
+
+    # 500 Internal Server Error
+    "INTERNAL_SERVER_ERROR": lambda msg="Error interno en el servidor": build_error_response(
+        500, msg, "Ocurrió un error inesperado al procesar la solicitud."
+    )
+}
+
+--------------------------------------------------------------------------------
+ARCHIVO: helpers.py
+--------------------------------------------------------------------------------
+
+# helpers.py
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Any
+
+# Zona horaria oficial del club (GMT-3)
+TZ_ARG = timezone(timedelta(hours=-3))
+
+# Expresión regular estándar para correos
+EMAIL_REGEX = re.compile(r"^[\w.-]+@[\w.-]+\.\w+$")
+
+
+# ----------------------------------------------------------------------
+# 1. Paginación y HATEOAS
+# ----------------------------------------------------------------------
+
+def parsear_paginacion(
+    limit_raw: Any = 10,
+    offset_raw: Any = 0,
+    limit_default: int = 10,
+    offset_default: int = 0
+) -> tuple[int, int]:
+    """
+    Parsea y valida los parámetros de paginación.
+    Lanza ValueError si no son enteros o están fuera de los límites permitidos:
+      - _limit: entero entre 1 y 100.
+      - _offset: entero mayor o igual a cero.
+    """
+    try:
+        limit = int(limit_default if limit_raw is None else limit_raw)
+        offset = int(offset_default if offset_raw is None else offset_raw)
+    except (ValueError, TypeError):
+        raise ValueError("Parámetros _limit y _offset deben ser números enteros.")
+
+    if limit < 1 or limit > 100 or offset < 0:
+        raise ValueError("Parámetros _limit (1-100) u _offset (>=0) inválidos.")
+
+    return limit, offset
+
+
+def build_hateoas_links(
+    base_url: str,
+    limit: int,
+    offset: int,
+    total: int,
+    query_params: dict[str, Any]
+) -> dict[str, dict[str, str]]:
+    """
+    Genera la navegación HATEOAS (_first, _prev, _next, _last)
+    conservando los filtros de consulta enviados por el cliente.
+    """
+    filtros_limpios = {
+        k: v for k, v in query_params.items() if k not in ("_limit", "_offset")
+    }
+
+    def generar_url(off: int) -> str:
+        params = filtros_limpios | {"_offset": off, "_limit": limit}
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        return f"{base_url}?{qs}" if qs else f"{base_url}?_offset={off}&_limit={limit}"
+
+    last_offset = max(0, ((total - 1) // limit) * limit) if total > 0 else 0
+    prev_offset = max(0, offset - limit) if offset > 0 else None
+    next_offset = offset + limit if (offset + limit) < total else None
+
+    links = {
+        "_first": {"href": generar_url(0)},
+        "_last": {"href": generar_url(last_offset)}
+    }
+    if prev_offset is not None and offset > 0:
+        links["_prev"] = {"href": generar_url(prev_offset)}
+    if next_offset is not None:
+        links["_next"] = {"href": generar_url(next_offset)}
+
+    return links
+
+
+# ----------------------------------------------------------------------
+# 2. Conversión de booleanos
+# ----------------------------------------------------------------------
+
+def parsear_booleano(valor: Any, nombre_campo: str = "campo") -> bool | None:
+    """
+    Convierte parámetros de texto 'true', 'false', '1', '0' a bool nativo.
+    Lanza ValueError si el valor no representa un booleano válido.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        return valor
+
+    val_str = str(valor).strip().lower()
+    if val_str in ("true", "1"):
+        return True
+    if val_str in ("false", "0"):
+        return False
+
+    raise ValueError(f"El campo '{nombre_campo}' debe ser un booleano (true o false).")
+
+
+# ----------------------------------------------------------------------
+# 3. Formateo y validación de fechas / rango de reservas
+# ----------------------------------------------------------------------
+
+def parsear_fecha_iso(dt_value: datetime | str | None) -> str | None:
+    """
+    Formatea una fecha como ISO 8601 con 6 microsegundos y zona horaria GMT-3:
+    Ejemplo: '2026-10-15T18:00:00.000000-03:00'
+    """
+    if dt_value is None:
+        return None
+    if isinstance(dt_value, str):
+        dt_value = datetime.fromisoformat(dt_value)
+    if dt_value.tzinfo is None:
+        dt_value = dt_value.replace(tzinfo=TZ_ARG)
+    return dt_value.strftime("%Y-%m-%dT%H:%M:%S.%f-03:00")
+
+
+def validar_intervalo_reserva(inicio_iso: str, fin_iso: str) -> tuple[datetime, datetime]:
+    """
+    Comprueba las reglas temporales exigidas para las reservas:
+      - Formato ISO 8601 correcto.
+      - Inicio en el futuro respecto al momento actual.
+      - Inicio menor a fin.
+      - Minutos en 00 (horas en punto).
+      - Duración entre 1 y 3 horas completas.
+      - Rango dentro del horario de atención del club (08:00 a 23:00).
+    Retorna la tupla (datetime_inicio, datetime_fin) con tzinfo GMT-3.
+    """
+    try:
+        inicio = datetime.fromisoformat(inicio_iso)
+        fin = datetime.fromisoformat(fin_iso)
+    except (ValueError, TypeError):
+        raise ValueError("Las fechas deben respetar el formato ISO 8601 con zona horaria.")
+
+    if inicio.tzinfo is None:
+        inicio = inicio.replace(tzinfo=TZ_ARG)
+    if fin.tzinfo is None:
+        fin = fin.replace(tzinfo=TZ_ARG)
+
+    ahora = datetime.now(TZ_ARG)
+    if inicio <= ahora:
+        raise ValueError("La reserva debe comenzar en el futuro.")
+
+    if inicio >= fin:
+        raise ValueError("La fecha y hora de inicio debe ser anterior a la de fin.")
+
+    if inicio.minute != 0 or inicio.second != 0 or fin.minute != 0 or fin.second != 0:
+        raise ValueError("Las reservas deben iniciar y finalizar en horas en punto (HH:00:00).")
+
+    duracion_horas = (fin - inicio).total_seconds() / 3600
+    if duracion_horas < 1 or duracion_horas > 3 or not duracion_horas.is_integer():
+        raise ValueError("La duración debe ser de entre 1 y 3 horas completas.")
+
+    if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
+        raise ValueError("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+
+    return inicio, fin
+
+
+def es_email_valido(email: Any) -> bool:
+    """Indica si la sintaxis del correo electrónico es válida."""
+    if not isinstance(email, str):
+        return False
+    return bool(EMAIL_REGEX.match(email.strip()))
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: controllers/canchas_controllers.py
+--------------------------------------------------------------------------------
+
+# controllers/canchas_controllers.py
+from datetime import datetime
+from flask import jsonify, request
+from errors import ERRORS
+from helpers import build_hateoas_links, parsear_booleano, parsear_paginacion, TZ_ARG
+from services.canchas_services import (
+    obtener_canchas_db,
+    crear_cancha_db,
+    obtener_canchas_disponibles_db,
+    contar_canchas_db
+)
+
+def listar_canchas_controller():
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+
+        filtros: dict = {}
+        id_deporte = request.args.get("id_deporte")
+        if id_deporte is not None:
+            filtros["id_deporte"] = int(id_deporte)
+        nombre = request.args.get("nombre")
+        if nombre is not None:
+            filtros["nombre"] = nombre
+        for campo in ("techada", "activa"):
+            valor = parsear_booleano(request.args.get(campo), campo)
+            if valor is not None:
+                filtros[campo] = valor
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
+
+    total = contar_canchas_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al contar canchas en la base de datos.")
+    canchas = obtener_canchas_db(filtros, limit, offset)
+    if canchas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar canchas en la base de datos.")
+    if not canchas and total == 0:
+        return "", 204
+
+    links = build_hateoas_links(
+        request.base_url, limit, offset, total, request.args.to_dict())
+    return jsonify({"canchas": canchas, "_links": links}), 200
+
+
+def crear_cancha_controller():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON es obligatorio.")
+
+    requeridos = ("nombre", "id_deporte", "precio_hora")
+    if any(campo not in data for campo in requeridos):
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("nombre, id_deporte y precio_hora son obligatorios.")
+
+    nombre = data["nombre"]
+    id_deporte = data["id_deporte"]
+    precio_hora = data["precio_hora"]
+    if not isinstance(nombre, str) or not nombre.strip():
+        return ERRORS["INVALID_FORMAT"]("nombre debe ser un texto no vacío.")
+    if isinstance(id_deporte, bool) or not isinstance(id_deporte, int):
+        return ERRORS["INVALID_FORMAT"]("id_deporte debe ser un entero.")
+    if isinstance(precio_hora, bool) or not isinstance(precio_hora, int) or precio_hora <= 0:
+        return ERRORS["INVALID_FORMAT"]("precio_hora debe ser un entero mayor a cero.")
+
+    techada = data.get("techada", False)
+    activa = data.get("activa", True)
+    if not isinstance(techada, bool) or not isinstance(activa, bool):
+        return ERRORS["INVALID_FORMAT"]("techada y activa deben ser valores booleanos.")
+
+    cancha_id, error = crear_cancha_db({
+        "nombre": nombre.strip(),
+        "id_deporte": id_deporte,
+        "precio_hora": precio_hora,
+        "techada": techada,
+        "activa": activa
+    })
+    if error == "DEPORTE_NOT_FOUND":
+        return ERRORS["NOT_FOUND"](f"No existe el deporte con id {id_deporte}.")
+    if error or not cancha_id:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo crear la cancha en la base de datos.")
+    return jsonify({"id": cancha_id, "mensaje": "Cancha creada correctamente."}), 201
+
+
+def consultar_disponibles_controller():
+    fecha_str = request.args.get("fecha")
+    hora_inicio_str = request.args.get("hora_inicio")
+    hora_fin_str = request.args.get("hora_fin")
+    if not fecha_str or not hora_inicio_str or not hora_fin_str:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("fecha, hora_inicio y hora_fin son obligatorios.")
+
+    try:
+        fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+        if len(hora_inicio_str) not in (5, 8) or len(hora_fin_str) not in (5, 8):
+            raise ValueError
+        formato_inicio = "%H:%M" if len(hora_inicio_str) == 5 else "%H:%M:%S"
+        formato_fin = "%H:%M" if len(hora_fin_str) == 5 else "%H:%M:%S"
+        hora_inicio = datetime.strptime(hora_inicio_str, formato_inicio).time()
+        hora_fin = datetime.strptime(hora_fin_str, formato_fin).time()
+    except ValueError:
+        return ERRORS["INVALID_FORMAT"]("Formato inválido de fecha u hora (esperado YYYY-MM-DD y HH:00[:00]).")
+
+    if hora_inicio.minute != 0 or hora_inicio.second != 0 or hora_fin.minute != 0 or hora_fin.second != 0:
+        return ERRORS["INVALID_FORMAT"]("Las reservas deben iniciar y finalizar en horas en punto.")
+
+    inicio_dt = datetime.combine(fecha, hora_inicio, tzinfo=TZ_ARG)
+    fin_dt = datetime.combine(fecha, hora_fin, tzinfo=TZ_ARG)
+    ahora = datetime.now(TZ_ARG)
+    if inicio_dt <= ahora:
+        return ERRORS["CONFLICT"]("La fecha y hora de inicio deben ser posteriores al momento actual.")
+    if inicio_dt >= fin_dt:
+        return ERRORS["INVALID_FORMAT"]("La hora de inicio debe ser anterior a la hora de fin.")
+
+    duracion_horas = (fin_dt - inicio_dt).total_seconds() / 3600
+    if duracion_horas < 1 or duracion_horas > 3:
+        return ERRORS["CONFLICT"]("La duración de la reserva debe ser de entre 1 y 3 horas completas.")
+    if inicio_dt.hour < 8 or fin_dt.hour > 23:
+        return ERRORS["CONFLICT"]("El intervalo debe encontrarse dentro del horario del club (08:00 a 23:00).")
+
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+        id_deporte_raw = request.args.get("id_deporte")
+        id_deporte = int(id_deporte_raw) if id_deporte_raw is not None else None
+        techada = parsear_booleano(request.args.get("techada"), "techada")
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
+
+    inicio_sql = inicio_dt.strftime("%Y-%m-%d %H:%M:%S")
+    fin_sql = fin_dt.strftime("%Y-%m-%d %H:%M:%S")
+    canchas = obtener_canchas_disponibles_db(
+        inicio_sql, fin_sql, id_deporte, techada, limit, offset
+    )
+    if canchas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la disponibilidad en la base de datos.")
+    return jsonify({"canchas": canchas}), 200
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: controllers/reservas_controllers.py
+--------------------------------------------------------------------------------
+
+# controllers/reservas_controllers.py
+from datetime import datetime, timezone, timedelta
+from flask import jsonify, request
+from errors import ERRORS
+from services.reservas_services import (
+    obtener_reservas_db,
+    contar_reservas_db,
+    crear_reserva_db,
+    obtener_reserva_por_id_db,
+    actualizar_estado_reserva_db
+)
+from helpers import build_hateoas_links
+
+# Zona horaria oficial del club (GMT-3)
+TZ_ARG = timezone(timedelta(hours=-3))
+
+
+def listar_reservas_controller():
+    """Devuelve en JSON las reservas paginadas con filtros."""
+    try:
+        limit = int(request.args.get("_limit", 10))
+        offset = int(request.args.get("_offset", 0))
+        if limit < 1 or limit > 100 or offset < 0:
+            return ERRORS["INVALID_FORMAT"]("Parámetros _limit (1-100) u _offset (>=0) inválidos.")
+    except ValueError:
+        return ERRORS["INVALID_FORMAT"]("_limit y _offset deben ser enteros.")
+
+    filtros: dict[str, int | str] = {}
+    try:
+        id_cancha = request.args.get("id_cancha")
+        if id_cancha is not None:
+            filtros["id_cancha"] = int(id_cancha)
+        id_socio = request.args.get("id_socio")
+        if id_socio is not None:
+            filtros["id_socio"] = int(id_socio)
+    except ValueError:
+        return ERRORS["INVALID_FORMAT"]("id_cancha e id_socio deben ser enteros.")
+
+    estado = request.args.get("estado")
+    if estado:
+        if estado not in ["confirmada", "cancelada", "finalizada"]:
+            return ERRORS["INVALID_FORMAT"](f"Estado desconocido: {estado}")
+        filtros["estado"] = estado
+
+    fecha_desde = request.args.get("fecha_desde")
+    if fecha_desde is not None:
+        filtros["fecha_desde"] = fecha_desde
+    fecha_hasta = request.args.get("fecha_hasta")
+    if fecha_hasta is not None:
+        filtros["fecha_hasta"] = fecha_hasta
+
+    total = contar_reservas_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al contar reservas en la base de datos.")
+
+    reservas = obtener_reservas_db(filtros=filtros, limit=limit, offset=offset)
+
+    if reservas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar reservas en la base de datos.")
+
+    if not reservas and total == 0:
+        return "", 204
+
+    links = build_hateoas_links(
+        request.base_url, limit, offset, total, request.args.to_dict())
+    return jsonify({"reservas": reservas, "_links": links}), 200
+
+
+def obtener_reserva_controller(reserva_id):
+    """Devuelve el detalle de una reserva o 404 Not Found."""
+    reserva = obtener_reserva_por_id_db(reserva_id)
+    if not reserva:
+        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {reserva_id}.")
+    return jsonify(reserva), 200
+
+
+def actualizar_estado_controller(reserva_id):
+    """Cambia el estado de la reserva validando las transiciones permitidas (Issue #12)."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or "estado" not in data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El campo 'estado' es obligatorio.")
+
+    nuevo_estado = data.get("estado")
+    estados_validos = ["confirmada", "cancelada", "finalizada"]
+    if not isinstance(nuevo_estado, str) or nuevo_estado not in estados_validos:
+        return ERRORS["INVALID_FORMAT"](f"Estado no reconocido: '{nuevo_estado}'.")
+
+    reserva = obtener_reserva_por_id_db(reserva_id)
+    if not reserva:
+        return ERRORS["NOT_FOUND"](f"No se encontró la reserva con id {reserva_id}.")
+
+    estado_actual = reserva["estado"]
+
+    if nuevo_estado == estado_actual:
+        return jsonify(reserva), 200
+
+    ahora = datetime.now(TZ_ARG)
+    inicio_raw = reserva.get("fecha_hora_inicio")
+    fin_raw = reserva.get("fecha_hora_fin")
+    if not isinstance(inicio_raw, str) or not isinstance(fin_raw, str):
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Las fechas de la reserva no tienen un formato válido.")
+    try:
+        inicio = datetime.fromisoformat(inicio_raw)
+        fin = datetime.fromisoformat(fin_raw)
+    except ValueError:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Las fechas de la reserva no tienen un formato válido.")
+
+    if estado_actual == "confirmada":
+        if nuevo_estado == "cancelada":
+            if ahora >= inicio:
+                return ERRORS["CONFLICT"]("No se puede cancelar una reserva cuyo horario de inicio ya comenzó o pasó.")
+        elif nuevo_estado == "finalizada":
+            if ahora < fin:
+                return ERRORS["CONFLICT"]("No se puede finalizar una reserva antes de que concluya su horario.")
+        else:
+            return ERRORS["CONFLICT"](f"Transición no permitida de '{estado_actual}' a '{nuevo_estado}'.")
+    else:
+        return ERRORS["CONFLICT"](f"No se permite modificar una reserva en estado '{estado_actual}'.")
+
+    filas_afectadas = actualizar_estado_reserva_db(reserva_id, nuevo_estado)
+    if filas_afectadas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo actualizar el estado de la reserva.")
+
+    reserva["estado"] = nuevo_estado
+    return jsonify(reserva), 200
+
+
+def crear_reserva_controller():
+    data = request.get_json(silent=True) or {}
+    requeridos = ["id_socio", "id_cancha",
+                  "fecha_hora_inicio", "fecha_hora_fin"]
+
+    if not all(k in data for k in requeridos):
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("Faltan campos obligatorios (id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin).")
+
+    inicio_str = data["fecha_hora_inicio"]
+    fin_str = data["fecha_hora_fin"]
+    try:
+        if not isinstance(inicio_str, str) or not isinstance(fin_str, str):
+            raise ValueError
+        inicio = datetime.fromisoformat(inicio_str)
+        fin = datetime.fromisoformat(fin_str)
+    except (TypeError, ValueError):
+        return ERRORS["INVALID_FORMAT"]("Formato de fecha inválido. Se espera ISO 8601 con zona horaria.")
+
+    ahora = datetime.now(TZ_ARG)
+    if inicio <= ahora:
+        return ERRORS["CONFLICT"]("La reserva debe comenzar en el futuro.")
+
+    if inicio >= fin:
+        return ERRORS["INVALID_FORMAT"]("fecha_hora_inicio debe ser menor a fecha_hora_fin.")
+
+    if inicio.minute != 0 or fin.minute != 0:
+        return ERRORS["INVALID_FORMAT"]("Las reservas deben iniciar y finalizar en horas en punto.")
+
+    duracion_horas = (fin - inicio).total_seconds() / 3600
+    if duracion_horas < 1 or duracion_horas > 3:
+        return ERRORS["CONFLICT"]("La duración debe ser de entre 1 y 3 horas completas.")
+
+    if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
+        return ERRORS["CONFLICT"]("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+
+    reserva, error = crear_reserva_db(data)
+
+    if error == "SOCIO_NOT_FOUND":
+        return ERRORS["NOT_FOUND"](f"No existe el socio con id {data['id_socio']}.")
+    if error == "SOCIO_INACTIVE":
+        return ERRORS["CONFLICT"]("El socio se encuentra inactivo.")
+    if error == "CANCHA_NOT_FOUND":
+        return ERRORS["NOT_FOUND"](f"No existe la cancha con id {data['id_cancha']}.")
+    if error == "CANCHA_INACTIVE":
+        return ERRORS["CONFLICT"]("La cancha se encuentra inactiva.")
+    if error == "OVERLAP_CANCHA":
+        return ERRORS["CONFLICT"]("La cancha ya tiene una reserva confirmada en ese intervalo.")
+    if error == "OVERLAP_SOCIO":
+        return ERRORS["CONFLICT"]("El socio ya tiene una reserva confirmada en ese intervalo.")
+    if error == "DB_ERROR" or not reserva:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo registrar la reserva en la base de datos.")
+
+    return jsonify(reserva), 201
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: controllers/socios_controllers.py
+--------------------------------------------------------------------------------
+
+# controllers/socios_controllers.py
+from flask import jsonify, request
+from errors import ERRORS
+from helpers import es_email_valido
+from services.socios_services import (
+    obtener_todos_los_socios,
+    obtener_socio_por_id_db,
+    obtener_socio_por_email_db,
+    guardar_nuevo_socio,
+    actualizar_socio_db
+)
+
+
+def listar_socios_controller():
+    """Devuelve en JSON la lista de socios activos."""
+    socios = obtener_todos_los_socios()
+    if socios is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
+    return jsonify({"socios": socios}), 200
+
+
+def crear_socio_controller():
+    data = request.get_json(silent=True) or {}
+    nombre = data.get("nombre")
+    email = data.get("email")
+
+    if not nombre or not email:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("nombre y email son obligatorios.")
+
+    if not isinstance(nombre, str) or not nombre.strip():
+        return ERRORS["INVALID_FORMAT"]("El nombre debe ser un texto no vacío.")
+
+    if not isinstance(email, str) or not es_email_valido(email):
+        return ERRORS["INVALID_FORMAT"]("El formato del correo electrónico no es válido.")
+
+    nombre_limpio = nombre.strip()
+    email_limpio = email.strip().lower()
+
+    if obtener_socio_por_email_db(email_limpio):
+        return ERRORS["CONFLICT"](f"Ya existe un socio registrado con el correo '{email_limpio}'.")
+
+    nuevo_id = guardar_nuevo_socio(nombre_limpio, email_limpio)
+    if not nuevo_id:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo registrar el socio en la base de datos.")
+
+    respuesta = {
+        "id": nuevo_id,
+        "nombre": nombre_limpio,
+        "email": email_limpio,
+        "activo": True
+    }
+    return jsonify(respuesta), 201
+
+
+def actualizar_socio_controller(socio_id: int):
+    """Actualiza parcialmente un socio (nombre, email, activo)."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
+
+    socio_actual = obtener_socio_por_id_db(socio_id)
+    if not socio_actual:
+        return ERRORS["NOT_FOUND"](f"No se encontró el socio con id {socio_id}.")
+
+    campos_a_actualizar = {}
+
+    if "nombre" in data:
+        nombre = data["nombre"]
+        if not isinstance(nombre, str) or not nombre.strip():
+            return ERRORS["INVALID_FORMAT"]("El campo 'nombre' debe ser un texto no vacío.")
+        campos_a_actualizar["nombre"] = nombre.strip()
+
+    if "email" in data:
+        email = data["email"]
+        if not isinstance(email, str) or not es_email_valido(email):
+            return ERRORS["INVALID_FORMAT"]("El formato del correo electrónico no es válido.")
+
+        email_limpio = email.strip().lower()
+        if obtener_socio_por_email_db(email_limpio, excluir_id=socio_id):
+            return ERRORS["CONFLICT"](f"El correo '{email_limpio}' ya pertenece a otro socio registrado.")
+        campos_a_actualizar["email"] = email_limpio
+
+    if "activo" in data:
+        activo = data["activo"]
+        if not isinstance(activo, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'activo' debe ser un booleano (true o false).")
+        campos_a_actualizar["activo"] = activo
+
+    if not campos_a_actualizar:
+        return ERRORS["INVALID_FORMAT"]("No se enviaron campos válidos para actualizar ('nombre', 'email', 'activo').")
+
+    filas_modificadas = actualizar_socio_db(socio_id, campos_a_actualizar)
+    if filas_modificadas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al actualizar el socio en la base de datos.")
+
+    return "", 204
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: controllers/deportes_controllers.py
+--------------------------------------------------------------------------------
+
+from flask import jsonify
+from services.deportes_services import listar_deportes_db
+
+def listar_deportes_controller():
+    """Obtiene los deportes y construye la respuesta HTTP en formato JSON."""
+    deportes = listar_deportes_db()
+    if not deportes:
+        return "", 204
+    return jsonify({"deportes": deportes}), 200
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: routes/canchas_routes.py
+--------------------------------------------------------------------------------
+
+# routes/canchas_routes.py
+from flask import Blueprint
+from controllers.canchas_controllers import (
+    listar_canchas_controller,
+    crear_cancha_controller,
+    consultar_disponibles_controller
+)
+
+canchas_bp = Blueprint('canchas_bp', __name__)
+
+@canchas_bp.route('/', methods=['GET'])
+def listar():
+    return listar_canchas_controller()
+
+@canchas_bp.route('/', methods=['POST'])
+def crear():
+    return crear_cancha_controller()
+
+@canchas_bp.route('/disponibles', methods=['GET'])
+def consultar_disponibles():
+    return consultar_disponibles_controller()
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: routes/reservas_routes.py
+--------------------------------------------------------------------------------
+
+# routes/reservas_routes.py
+from flask import Blueprint
+from controllers.reservas_controllers import (
+    listar_reservas_controller,
+    crear_reserva_controller,
+    obtener_reserva_controller,
+    actualizar_estado_controller
+)
+
+reservas_bp = Blueprint('reservas_bp', __name__)
+
+@reservas_bp.route('', methods=['GET'])
+@reservas_bp.route('/', methods=['GET'])
+def listar_reservas():
+    return listar_reservas_controller()
+
+@reservas_bp.route('', methods=['POST'])
+@reservas_bp.route('/', methods=['POST'])
+def crear_reserva():
+    return crear_reserva_controller()
+
+@reservas_bp.route('/<int:reserva_id>', methods=['GET'])
+def obtener_reserva(reserva_id):
+    return obtener_reserva_controller(reserva_id)
+
+@reservas_bp.route('/<int:reserva_id>/estado', methods=['PUT'])
+def actualizar_estado_reserva(reserva_id):
+    return actualizar_estado_controller(reserva_id)
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: routes/socios_routes.py
+--------------------------------------------------------------------------------
+
+# routes/socios_routes.py
+from flask import Blueprint
+from controllers.socios_controllers import (
+    listar_socios_controller,
+    crear_socio_controller,
+    actualizar_socio_controller
+)
+
+socios_bp = Blueprint('socios_bp', __name__)
+
+@socios_bp.route('', methods=['GET'])
+@socios_bp.route('/', methods=['GET'])
+def listar_socios():
+    return listar_socios_controller()
+
+@socios_bp.route('', methods=['POST'])
+@socios_bp.route('/', methods=['POST'])
+def crear_socio():
+    return crear_socio_controller()
+
+@socios_bp.route('/<int:socio_id>', methods=['PATCH'])
+def actualizar_socio(socio_id):
+    return actualizar_socio_controller(socio_id)
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: routes/deportes_routes.py
+--------------------------------------------------------------------------------
+
+from flask import Blueprint
+from controllers.deportes_controllers import listar_deportes_controller
+
+deportes_bp = Blueprint('deportes_bp', __name__)
+
+@deportes_bp.route('/', methods=['GET'])
+def listar_deportes():
+    return listar_deportes_controller()
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: services/canchas_services.py
+--------------------------------------------------------------------------------
+
+# services/canchas_services.py
+from typing import Any
+from db import execute
+
+
+def _construir_filtros(filtros: dict):
+    condiciones: list[str] = []
+    params: list[Any] = []
+    for campo, columna in (
+        ("id_deporte", "id_deporte"),
+        ("nombre", "nombre"),
+        ("techada", "techada"),
+        ("activa", "activa")
+    ):
+        if campo not in filtros:
+            continue
+        if campo == "nombre":
+            condiciones.append(f"{columna} LIKE %s")
+            params.append(f"%{filtros[campo]}%")
+        else:
+            condiciones.append(f"{columna} = %s")
+            params.append(filtros[campo])
+    where = f" WHERE {' AND '.join(condiciones)}" if condiciones else ""
+    return where, tuple(params)
+
+
+def contar_canchas_db(filtros: dict | None = None) -> int | None:
+    where, params = _construir_filtros(filtros or {})
+    resultado = execute(f"SELECT COUNT(*) AS total FROM canchas{where};", params)
+    return resultado[0]["total"] if resultado else None
+
+
+def obtener_canchas_db(
+    filtros: dict | None = None,
+    limit: int = 10,
+    offset: int = 0
+) -> list[dict] | None:
+    where, params = _construir_filtros(filtros or {})
+    query = f"""
+        SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
+        FROM canchas{where}
+        ORDER BY id_cancha
+        LIMIT %s OFFSET %s;
+    """
+    return execute(query, params + (limit, offset))
+
+
+def crear_cancha_db(datos: dict) -> tuple[int | None, str | None]:
+    deportes = execute(
+        "SELECT id_deporte FROM deportes WHERE id_deporte = %s;",
+        (datos["id_deporte"],)
+    )
+    if deportes is None:
+        return None, "DB_ERROR"
+    if not deportes:
+        return None, "DEPORTE_NOT_FOUND"
+
+    query = """
+        INSERT INTO canchas (nombre, id_deporte, precio_hora, techada, activa, precio_reserva)
+        VALUES (%s, %s, %s, %s, %s, %s);
+    """
+    cancha_id = execute(query, (
+        datos["nombre"],
+        datos["id_deporte"],
+        datos["precio_hora"],
+        datos["techada"],
+        datos["activa"],
+        datos["precio_hora"]
+    ))
+    return (cancha_id, None) if cancha_id else (None, "DB_ERROR")
+
+
+def contar_canchas_disponibles_db(inicio: str, fin: str, id_deporte: int | None = None, techada: bool | None = None) -> int:
+    query = """
+        SELECT COUNT(*) AS total
+        FROM canchas c
+        WHERE c.activa = TRUE
+          AND c.id_cancha NOT IN (
+              SELECT r.id_cancha
+              FROM reservas r
+              WHERE r.estado = 'confirmada'
+                AND r.fecha_hora_inicio < %s
+                AND r.fecha_hora_fin > %s
+          )
+    """
+    params: list[Any] = [fin, inicio]
+    if id_deporte is not None:
+        query += " AND c.id_deporte = %s"
+        params.append(id_deporte)
+    if techada is not None:
+        query += " AND c.techada = %s"
+        params.append(techada)
+    res = execute(query, tuple(params))
+    return res[0]["total"] if res else 0
+
+
+def obtener_canchas_disponibles_db(
+    inicio: str,
+    fin: str,
+    id_deporte: int | None = None,
+    techada: bool | None = None,
+    limit: int = 10,
+    offset: int = 0
+) -> list[dict] | None:
+    query = """
+        SELECT c.id_cancha AS id, c.nombre, c.id_deporte, c.precio_hora, c.techada, c.activa
+        FROM canchas c
+        WHERE c.activa = TRUE
+          AND c.id_cancha NOT IN (
+              SELECT r.id_cancha
+              FROM reservas r
+              WHERE r.estado = 'confirmada'
+                AND r.fecha_hora_inicio < %s
+                AND r.fecha_hora_fin > %s
+          )
+    """
+    params: list[Any] = [fin, inicio]
+    if id_deporte is not None:
+        query += " AND c.id_deporte = %s"
+        params.append(id_deporte)
+    if techada is not None:
+        query += " AND c.techada = %s"
+        params.append(techada)
+    query += " ORDER BY c.id_cancha LIMIT %s OFFSET %s;"
+    params.extend([limit, offset])
+    return execute(query, tuple(params))
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: services/reservas_services.py
+--------------------------------------------------------------------------------
+
+# reservas/reservas_services.py
+from datetime import datetime
+from typing import Any
+from db import execute
+from helpers import parsear_fecha_iso
+
+FiltrosReserva = dict[str, int | str]
+
+
+def _construir_condiciones(filtros: FiltrosReserva | None) -> tuple[list[str], list[int | str]]:
+    condiciones = []
+    parametros: list[int | str] = []
+    if not filtros:
+        return condiciones, parametros
+
+    filtros_sql = (
+        ("id_cancha", "id_cancha = %s"),
+        ("id_socio", "id_socio = %s"),
+        ("estado", "estado = %s"),
+        ("fecha_desde", "DATE(fecha_hora_inicio) >= %s"),
+        ("fecha_hasta", "DATE(fecha_hora_inicio) <= %s"),
+    )
+    for clave, condicion_sql in filtros_sql:
+        valor = filtros.get(clave)
+        if valor is not None:
+            condiciones.append(condicion_sql)
+            parametros.append(valor)
+    return condiciones, parametros
+
+
+def contar_reservas_db(filtros: FiltrosReserva | None = None) -> int | None:
+    condiciones, parametros = _construir_condiciones(filtros)
+    query = "SELECT COUNT(*) AS total FROM reservas"
+    if condiciones:
+        query += " WHERE " + " AND ".join(condiciones)
+    resultado = execute(query, tuple(parametros))
+    if not isinstance(resultado, list):
+        return None
+    if not resultado:
+        return 0
+    return int(resultado[0]["total"])
+
+
+def obtener_reservas_db(filtros: FiltrosReserva | None = None, limit: int = 10, offset: int = 0) -> list[dict[str, Any]] | None:
+    condiciones, parametros = _construir_condiciones(filtros)
+    query = """
+        SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin,
+               estado, tarifa_historica AS precio_hora, total AS precio_total
+        FROM reservas
+    """
+    if condiciones:
+        query += " WHERE " + " AND ".join(condiciones)
+    query += " ORDER BY id ASC LIMIT %s OFFSET %s;"
+    parametros.extend([limit, offset])
+    filas = execute(query, tuple(parametros))
+    if not isinstance(filas, list):
+        return None
+    for reserva in filas:
+        reserva["fecha_hora_inicio"] = parsear_fecha_iso(reserva["fecha_hora_inicio"])
+        reserva["fecha_hora_fin"] = parsear_fecha_iso(reserva["fecha_hora_fin"])
+    return filas
+
+
+def obtener_reserva_por_id_db(reserva_id: int) -> dict[str, Any] | None:
+    query = "SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica AS precio_hora, total AS precio_total FROM reservas WHERE id = %s;"
+    resultado = execute(query, (reserva_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return None
+    reserva = resultado[0]
+    reserva["fecha_hora_inicio"] = parsear_fecha_iso(reserva["fecha_hora_inicio"])
+    reserva["fecha_hora_fin"] = parsear_fecha_iso(reserva["fecha_hora_fin"])
+    return reserva
+
+
+def actualizar_estado_reserva_db(reserva_id: int, nuevo_estado: str) -> int | None:
+    query = "UPDATE reservas SET estado = %s WHERE id = %s;"
+    resultado = execute(query, (nuevo_estado, reserva_id))
+    return resultado if isinstance(resultado, int) else None
+
+
+def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
+    id_socio = datos.get("id_socio")
+    id_cancha = datos.get("id_cancha")
+    inicio_iso = datos.get("fecha_hora_inicio")
+    fin_iso = datos.get("fecha_hora_fin")
+    if not isinstance(inicio_iso, str) or not isinstance(fin_iso, str):
+        return None, "INVALID_DATE"
+
+    query_socio = "SELECT id_socio, estado FROM socios WHERE id_socio = %s;"
+    socio_res = execute(query_socio, (id_socio,))
+    if not socio_res:
+        return None, "SOCIO_NOT_FOUND"
+    if not socio_res[0]["estado"]:
+        return None, "SOCIO_INACTIVE"
+
+    query_cancha = "SELECT id_cancha, precio_hora, activa FROM canchas WHERE id_cancha = %s;"
+    cancha_res = execute(query_cancha, (id_cancha,))
+    if not cancha_res:
+        return None, "CANCHA_NOT_FOUND"
+    cancha = cancha_res[0]
+    if not cancha["activa"]:
+        return None, "CANCHA_INACTIVE"
+
+    query_cancha_solapada = """
+        SELECT COUNT(*) AS total FROM reservas
+        WHERE id_cancha = %s AND estado = 'confirmada'
+          AND fecha_hora_inicio < %s AND fecha_hora_fin > %s;
+    """
+    res_solapada = execute(query_cancha_solapada, (id_cancha, fin_iso, inicio_iso))
+    if res_solapada and res_solapada[0]["total"] > 0:
+        return None, "OVERLAP_CANCHA"
+
+    query_socio_solapado = """
+        SELECT COUNT(*) AS total FROM reservas
+        WHERE id_socio = %s AND estado = 'confirmada'
+          AND fecha_hora_inicio < %s AND fecha_hora_fin > %s;
+    """
+    res_socio = execute(query_socio_solapado, (id_socio, fin_iso, inicio_iso))
+    if res_socio and res_socio[0]["total"] > 0:
+        return None, "OVERLAP_SOCIO"
+
+    dt_inicio = datetime.fromisoformat(inicio_iso)
+    dt_fin = datetime.fromisoformat(fin_iso)
+    duracion_horas = int((dt_fin - dt_inicio).total_seconds() // 3600)
+    precio_hora = cancha["precio_hora"]
+    total = duracion_horas * precio_hora
+
+    query_insert = """
+        INSERT INTO reservas (id_cancha, id_socio, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica, total)
+        VALUES (%s, %s, %s, %s, 'confirmada', %s, %s);
+    """
+    nuevo_id = execute(query_insert, (id_cancha, id_socio, inicio_iso, fin_iso, precio_hora, total))
+    if not nuevo_id:
+        return None, "DB_ERROR"
+
+    reserva_creada = {
+        "id": nuevo_id,
+        "id_socio": id_socio,
+        "id_cancha": id_cancha,
+        "fecha_hora_inicio": parsear_fecha_iso(inicio_iso),
+        "fecha_hora_fin": parsear_fecha_iso(fin_iso),
+        "estado": "confirmada",
+        "precio_hora": precio_hora,
+        "precio_total": total
+    }
+    return reserva_creada, None
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: services/socios_services.py
+--------------------------------------------------------------------------------
+
+# services/socios_services.py
+from typing import Any
+from db import execute
+
+def obtener_todos_los_socios():
+    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE estado = %s;"
+    return execute(query, (True,))
+
+def obtener_socio_por_id_db(socio_id: int) -> dict[str, Any] | None:
+    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE id_socio = %s;"
+    filas = execute(query, (socio_id,))
+    if not isinstance(filas, list) or not filas:
+        return None
+    return filas[0]
+
+def obtener_socio_por_email_db(email: str, excluir_id: int | None = None) -> dict[str, Any] | None:
+    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE email = %s"
+    params: list[str | int] = [email]
+    if excluir_id is not None:
+        query += " AND id_socio != %s"
+        params.append(excluir_id)
+    filas = execute(query, tuple(params))
+    if not isinstance(filas, list) or not filas:
+        return None
+    return filas[0]
+
+def guardar_nuevo_socio(nombre: str, email: str) -> int | None:
+    query = "INSERT INTO socios (nombre, email, estado) VALUES (%s, %s, TRUE);"
+    resultado = execute(query, (nombre, email))
+    return resultado if isinstance(resultado, int) else None
+
+def actualizar_socio_db(socio_id: int, campos: dict[str, Any]) -> int | None:
+    set_clauses = []
+    params = []
+    if "nombre" in campos:
+        set_clauses.append("nombre = %s")
+        params.append(campos["nombre"])
+    if "email" in campos:
+        set_clauses.append("email = %s")
+        params.append(campos["email"])
+    if "activo" in campos:
+        set_clauses.append("estado = %s")
+        params.append(campos["activo"])
+    if not set_clauses:
+        return 0
+    query = f"UPDATE socios SET {', '.join(set_clauses)} WHERE id_socio = %s;"
+    params.append(socio_id)
+    return execute(query, tuple(params))
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: services/deportes_services.py
+--------------------------------------------------------------------------------
+
+from db import execute
+
+def listar_deportes_db():
+    query = """
+        SELECT id_deporte AS id, nombre
+        FROM deportes
+        ORDER BY id_deporte ASC;
+    """
+    return execute(query)
+
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+ARCHIVO: .env
+--------------------------------------------------------------------------------
+
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=gabriel
+MYSQL_PASSWORD=Permanganato64
+MYSQL_DATABASE=club_deportivo
+FLASK_PORT=5001
+ENV=dev
+
+--------------------------------------------------------------------------------
+ARCHIVO: .env.example
+--------------------------------------------------------------------------------
+
+MYSQL_HOST=
+MYSQL_PORT=
+MYSQL_USER=
+MYSQL_PASSWORD=
+MYSQL_DATABASE=
+FLASK_PORT=
+ENV=
+
+--------------------------------------------------------------------------------
+ARCHIVO: .gitignore
+--------------------------------------------------------------------------------
+
+# Entornos virtuales (pesados y locales a cada máquina)
+.venv/
+venv/
+ENV/
+env/
+
+# Variables de entorno y credenciales (seguridad)
+.env
+*.env
+
+# Archivos de caché y bytecode compilado de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configuración local del IDE (PyCharm / JetBrains)
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Base de datos local o volcados de logs temporales
+*.log
+*.sqlite3
+
+--------------------------------------------------------------------------------
+ARCHIVO: requirements.txt
+--------------------------------------------------------------------------------
+
+flask
+mysql-connector-python
+python-dotenv
+
+--------------------------------------------------------------------------------
+ARCHIVO: swagger.yaml (Resumen - Estructura completa con extensiones)
+--------------------------------------------------------------------------------
+
+EL archivo swagger.yaml define la especificación OpenAPI 3.0 de la API.
+Incluye los siguientes endpoints y esquemas:
+
+ENDPOINTS:
+  - GET    /deportes                           -> Listar deportes precargados
+  - GET    /canchas                            -> Listar canchas (con filtros)
+  - POST   /canchas                            -> Crear cancha
+  - GET    /canchas/{id}                       -> Obtener cancha por ID
+  - PATCH  /canchas/{id}                       -> Actualizar parcialmente cancha
+  - DELETE /canchas/{id}                       -> Eliminar cancha (sin reservas)
+  - GET    /canchas/disponibles                -> Consultar canchas disponibles
+  - GET    /socios                             -> Listar socios (con filtros)
+  - POST   /socios                             -> Crear socio
+  - GET    /socios/{id}                        -> Obtener socio por ID
+  - PATCH  /socios/{id}                        -> Actualizar parcialmente socio
+  - GET    /reservas                           -> Listar reservas (con filtros)
+  - POST   /reservas                           -> Crear reserva
+  - GET    /reservas/{id}                      -> Obtener reserva por ID
+  - PUT    /reservas/{id}/estado               -> Cambiar estado de reserva
+
+  EXTENSIONES OPCIONALES:
+  - GET    /bloqueos                           -> Listar bloqueos de mantenimiento
+  - POST   /bloqueos                           -> Crear bloqueo de mantenimiento
+  - DELETE /bloqueos/{id}                      -> Eliminar bloqueo
+  - POST   /reservas/recurrentes               -> Crear reservas recurrentes
+
+COMPONENTES PRINCIPALES:
+  Schemas: Deporte, Cancha, CanchaCreate, CanchaUpdate, Socio, SocioCreate,
+           SocioUpdate, Reserva, ReservaCreate, EstadoReserva, Bloqueo,
+           BloqueoCreate, ReservaRecurrenteCreate, Links, Link, Error, Errores,
+           ErroresConConflictos, DeportesListResponse, CanchasListResponse,
+           SociosListResponse, ReservasListResponse, BloqueosListResponse
+
+  Parámetros: Id, Limit, Offset, NombreFilter, IdDeporteFilter, TechadaFilter,
+              ActivaFilter, ActivoFilter, EstadoFilter, IdCanchaFilter,
+              IdSocioFilter, FechaDesdeFilter, FechaHastaFilter, FechaRequired,
+              HoraInicioRequired, HoraFinRequired, FechaBloqueoFilter
+
+  Respuestas: GetDeportesList200, GetCanchasList200, GetCancha200,
+              GetSociosList200, GetSocio200, GetReservasList200, GetReserva200,
+              GetBloqueosList200, Created, NoContent, BadRequest, NotFound,
+              Conflict, InternalServerError, ReservasRecurrentesConflict
+
+--------------------------------------------------------------------------------
+ARCHIVO: README.md
+--------------------------------------------------------------------------------
+
+# ⚽ Sistema de Reservas - Club Deportivo Encuentro
+
+Trabajo práctico de backend para la materia **"Introducción al Desarrollo de Software"** — Facultad de Ingeniería de la Universidad de Buenos Aires (FIUBA).
+
+## 👥 Integrantes
+
+| Nombre y Apellido | Padrón |
+| :--- | :--- |
+| Martin Simajowich | 106935 |
+| Gabriel Alexander Saavedra Gutierrez | 114419 |
+| Federico Albarracín | 116268 |
+| Nicole Gomez | 112221 |
+| Vanessa Michuy | 115947 |
+| Adriana Camila Rodriguez Caballero | 116394 |
+
+## 🚀 Características Principales
+
+* **Gestión de Recursos:** Administración integral de canchas, deportes y socios del club.
+* **Control de Disponibilidad:** Consulta de turnos libres en tiempo real y prevención estricta de solapamientos horarios (tanto por cancha como por socio en turnos simultáneos).
+* **Ciclo de Vida de Reservas:** Creación en estado `confirmada`, cálculo de importes, congelamiento de tarifa histórica y transiciones controladas a `cancelada` o `finalizada`.
+* **Paginación y Estándares HATEOAS:** Respuestas paginadas con `_limit` y `_offset`, acompañadas por enlaces de navegación (`_first`, `_prev`, `_next`, `_last`) y filtros combinables por `AND`.
+* **Contrato OpenAPI 3.0:** Respuestas serializadas en JSON y manejo estructurado de errores (`400`, `404`, `409`, `500`) según la especificación formal de `swagger.yaml`.
+
+## 🛠️ Tecnologías y Requisitos Previos
+
+* **Lenguaje:** Python 3.10 o superior (desarrollado sobre Python 3.12)
+* **Framework:** Flask 3.x
+* **Base de Datos:** MySQL 8.0+
+* **Driver:** `mysql-connector-python`
+* **Variables de Entorno:** `python-dotenv`
+
+## 📁 Estructura del Proyecto
+
+```text
+fiuba-ids-flask/
+├── app.py                 # Punto de entrada de la aplicación y registro de Blueprints
+├── db.py                  # Conexión centralizada a MySQL y ejecutor de consultas
+├── errors.py              # Respuestas estandarizadas de error según esquema Swagger
+├── helpers.py             # Funciones utilitarias compartidas (paginación, HATEOAS, validaciones)
+├── init_db.sql            # Script de inicialización de tablas y precarga de deportes
+├── swagger.yaml           # Contrato OpenAPI 3.0 de la API
+├── requirements.txt       # Dependencias del proyecto
+├── .env.example           # Plantilla de variables de entorno
+├── routes/                # Capa de transporte HTTP (Blueprints y ruteo)
+├── controllers/           # Validación de peticiones y respuestas HTTP
+└── services/              # Lógica de negocio y consultas SQL parametrizadas
+```
+
+## ⚙️ Instalación y Puesta en Marcha
+
+### 1. Configurar Variables de Entorno
+```bash
+cp .env.example .env
+```
+
+### 2. Crear y Activar el Entorno Virtual
+- **Linux / macOS:**
+  ```bash
+  python3 -m venv .venv
+  source .venv/bin/activate
+  ```
+- **Windows (CMD o PowerShell):**
+  ```cmd
+  python -m venv .venv
+  .venv\Scripts\activate
+  ```
+
+### 3. Instalar Dependencias
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 4. Inicializar la Base de Datos
+```bash
+mysql -u root -p < init_db.sql
+```
+
+### 5. Iniciar la API
+```bash
+python3 app.py
+```
+El servidor quedará disponible por defecto en: [http://localhost:5000](http://localhost:5000) (o en el puerto definido por `FLASK_PORT` en tu `.env`).
+
+## 📋 Supuestos y Reglas de Negocio
+
+### 🕒 Manejo Horario y Estándar Temporal
+* **Estándar:** Todas las fechas y horas se procesan bajo el estándar **ISO 8601** con zona horaria oficial GMT-3 (`YYYY-MM-DDTHH:MM:SS-03:00`).
+* **Operación:** El club opera únicamente de **08:00 a 23:00**.
+* **Turnos:** Los turnos se reservan en horas en punto con una duración de **1 a 3 horas completas**.
+
+### 💵 Tarifas y Moneda
+* **Consistencia:** Todos los precios se gestionan y persisten como **números enteros en centavos** para evitar inconsistencias de redondeo con coma flotante.
+* **Congelamiento de Tarifa:** La reserva congela la tarifa horaria vigente al momento de su creación. Modificaciones futuras en la tarifa de la cancha no alterarán las reservas preexistentes.
+
+### 🔒 Políticas de Integridad y Estados
+* **Baja Lógica de Canchas:** No se permite eliminar físicamente una cancha que posea reservas históricas o activas (retorna `409 Conflict`). En su lugar, se realiza una baja lógica desactivándola.
+* **Cancelaciones:** La cancelación (`cancelada`) solo es válida antes del horario de inicio del turno.
+* **Finalización:** El cambio de estado a `finalizada` únicamente puede aplicarse una vez transcurrido el horario de finalización del turno.
+
+## 🧪 Ejemplos de Solicitudes (cURL)
+
+### Listar deportes precargados
+```bash
+curl -X GET http://localhost:5000/deportes
+```
+
+### Crear un nuevo socio
+```bash
+curl -X POST http://localhost:5000/socios \
+  -H "Content-Type: application/json" \
+  -d '{"nombre": "Carlos Tevez", "email": "carlos.tevez@club.com"}'
+```
+
+### Consultar reservas paginadas con filtros
+```bash
+curl -X GET "http://localhost:5000/reservas?estado=confirmada&_limit=5&_offset=0"
+```
+
+================================================================================
+  FIN DEL DOCUMENTO
+================================================================================

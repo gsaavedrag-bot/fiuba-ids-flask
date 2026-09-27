@@ -40,10 +40,12 @@ def obtener_canchas_db(
     query = f"""
         SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
         FROM canchas{where}
-        ORDER BY id_cancha
+        ORDER BY id_cancha ASC
         LIMIT %s OFFSET %s;
     """
-    return execute(query, params + (limit, offset))
+    parametros = list(params)
+    parametros.extend([limit, offset])
+    return execute(query, tuple(parametros))
 
 
 def crear_cancha_db(datos: dict) -> tuple[int | None, str | None]:

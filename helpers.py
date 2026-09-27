@@ -145,15 +145,15 @@ def validar_intervalo_reserva(inicio_iso: str, fin_iso: str) -> tuple[datetime, 
     if inicio >= fin:
         raise ValueError("La fecha y hora de inicio debe ser anterior a la de fin.")
 
-    if inicio.minute != 0 or inicio.second != 0 or fin.minute != 0 or fin.second != 0:
-        raise ValueError("Las reservas deben iniciar y finalizar en horas en punto (HH:00:00).")
-
     duracion_horas = (fin - inicio).total_seconds() / 3600
     if duracion_horas < 1 or duracion_horas > 3 or not duracion_horas.is_integer():
         raise ValueError("La duración debe ser de entre 1 y 3 horas completas.")
 
     if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
         raise ValueError("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+
+    if inicio.minute != 0 or inicio.second != 0 or fin.minute != 0 or fin.second != 0:
+        raise ValueError("Las reservas deben iniciar y finalizar en horas en punto (HH:00:00).")
 
     return inicio, fin
 

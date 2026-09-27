@@ -1,7 +1,8 @@
 # controllers/reservas_controllers.py
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from flask import jsonify, request
 from errors import ERRORS
+from helpers import build_hateoas_links, validar_intervalo_reserva, TZ_ARG
 from services.reservas_services import (
     obtener_reservas_db,
     contar_reservas_db,
@@ -9,10 +10,6 @@ from services.reservas_services import (
     obtener_reserva_por_id_db,
     actualizar_estado_reserva_db
 )
-from helpers import build_hateoas_links
-
-# Zona horaria oficial del club (GMT-3)
-TZ_ARG = timezone(timedelta(hours=-3))
 
 
 def listar_reservas_controller():
@@ -95,7 +92,7 @@ def actualizar_estado_controller(reserva_id):
 
     # Regla: Repetir el estado actual devuelve éxito sin modificar
     if nuevo_estado == estado_actual:
-        return jsonify(reserva), 200
+        return "", 204
 
     # Validaciones temporales de transición
     ahora = datetime.now(TZ_ARG)
@@ -126,8 +123,7 @@ def actualizar_estado_controller(reserva_id):
     if filas_afectadas is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo actualizar el estado de la reserva.")
 
-    reserva["estado"] = nuevo_estado
-    return jsonify(reserva), 200
+    return "", 204
 
 
 def crear_reserva_controller():
@@ -138,32 +134,16 @@ def crear_reserva_controller():
     if not all(k in data for k in requeridos):
         return ERRORS["MISSING_REQUIRED_FIELDS"]("Faltan campos obligatorios (id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin).")
 
-    inicio_str = data["fecha_hora_inicio"]
-    fin_str = data["fecha_hora_fin"]
     try:
-        if not isinstance(inicio_str, str) or not isinstance(fin_str, str):
-            raise ValueError
-        inicio = datetime.fromisoformat(inicio_str)
-        fin = datetime.fromisoformat(fin_str)
-    except (TypeError, ValueError):
-        return ERRORS["INVALID_FORMAT"]("Formato de fecha inválido. Se espera ISO 8601 con zona horaria.")
-
-    ahora = datetime.now(TZ_ARG)
-    if inicio <= ahora:
-        return ERRORS["CONFLICT"]("La reserva debe comenzar en el futuro.")
-
-    if inicio >= fin:
-        return ERRORS["INVALID_FORMAT"]("fecha_hora_inicio debe ser menor a fecha_hora_fin.")
-
-    if inicio.minute != 0 or fin.minute != 0:
-        return ERRORS["INVALID_FORMAT"]("Las reservas deben iniciar y finalizar en horas en punto.")
-
-    duracion_horas = (fin - inicio).total_seconds() / 3600
-    if duracion_horas < 1 or duracion_horas > 3:
-        return ERRORS["CONFLICT"]("La duración debe ser de entre 1 y 3 horas completas.")
-
-    if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
-        return ERRORS["CONFLICT"]("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+        validar_intervalo_reserva(
+            data["fecha_hora_inicio"],
+            data["fecha_hora_fin"]
+        )
+    except ValueError as error:
+        mensaje = str(error)
+        if any(regla in mensaje for regla in ("futuro", "duración", "horario")):
+            return ERRORS["CONFLICT"](mensaje)
+        return ERRORS["INVALID_FORMAT"](mensaje)
 
     reserva, error = crear_reserva_db(data)
 

@@ -9,37 +9,10 @@ from services.reservas_services import (
     obtener_reserva_por_id_db,
     actualizar_estado_reserva_db
 )
+from helpers import build_hateoas_links
 
 # Zona horaria oficial del club (GMT-3)
 TZ_ARG = timezone(timedelta(hours=-3))
-
-
-def _construir_hateoas(base_url: str, limit: int, offset: int, total: int, query_params: dict):
-    """Genera los enlaces _first, _prev, _next y _last respetando HATEOAS."""
-    clean_params = {k: v for k, v in query_params.items() if k not in [
-        "_limit", "_offset"]}
-
-    def generar_url(o, l):
-        p = clean_params.copy()
-        p["_offset"] = o
-        p["_limit"] = l
-        qs = "&".join(f"{k}={v}" for k, v in p.items())
-        return f"{base_url}?{qs}" if qs else f"{base_url}?_offset={o}&_limit={l}"
-
-    last_offset = max(0, ((total - 1) // limit) * limit) if total > 0 else 0
-    prev_offset = max(0, offset - limit) if offset > 0 else None
-    next_offset = offset + limit if (offset + limit) < total else None
-
-    links = {
-        "_first": {"href": generar_url(0, limit)},
-        "_last": {"href": generar_url(last_offset, limit)}
-    }
-    if prev_offset is not None and offset > 0:
-        links["_prev"] = {"href": generar_url(prev_offset, limit)}
-    if next_offset is not None:
-        links["_next"] = {"href": generar_url(next_offset, limit)}
-
-    return links
 
 
 def listar_reservas_controller():
@@ -90,7 +63,7 @@ def listar_reservas_controller():
     if not reservas and total == 0:
         return "", 204
 
-    links = _construir_hateoas(
+    links = build_hateoas_links(
         request.base_url, limit, offset, total, request.args.to_dict())
     return jsonify({"reservas": reservas, "_links": links}), 200
 
@@ -167,11 +140,12 @@ def crear_reserva_controller():
 
     inicio_str = data["fecha_hora_inicio"]
     fin_str = data["fecha_hora_fin"]
-
     try:
+        if not isinstance(inicio_str, str) or not isinstance(fin_str, str):
+            raise ValueError
         inicio = datetime.fromisoformat(inicio_str)
         fin = datetime.fromisoformat(fin_str)
-    except ValueError:
+    except (TypeError, ValueError):
         return ERRORS["INVALID_FORMAT"]("Formato de fecha inválido. Se espera ISO 8601 con zona horaria.")
 
     ahora = datetime.now(TZ_ARG)

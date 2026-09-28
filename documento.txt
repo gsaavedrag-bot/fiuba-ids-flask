@@ -17,30 +17,26 @@ fiuba-ids-flask/
 ├── requirements.txt                # Dependencias Python
 ├── README.md                       # Documentación del proyecto
 ├── swagger.yaml                    # Especificación de API (OpenAPI 3.0)
-├── .env                            # Variables de entorno (configuración local)
 ├── .env.example                    # Ejemplo de variables de entorno
 ├── .gitignore                      # Archivos ignorados por Git
 ├── Enunciado - Estudiantes.pdf     # Enunciado del trabajo práctico
 │
 ├── controllers/                    # Capa de controladores (lógica de negocio HTTP)
-│   ├── __pycache__/
 │   ├── canchas_controllers.py      # Controlador de canchas (incluye GET/PATCH/DELETE/{id})
 │   ├── reservas_controllers.py     # Controlador de reservas (incluye cambio de estado)
 │   ├── socios_controllers.py       # Controlador de socios (incluye GET/{id}, paginación, filtros)
 │   └── deportes_controllers.py     # Controlador de deportes
 │
 ├── routes/                         # Definición de rutas (Blueprints de Flask)
-│   ├── __pycache__/
 │   ├── canchas_routes.py           # Rutas de canchas (incluye GET/PATCH/DELETE /{id})
 │   ├── reservas_routes.py          # Rutas de reservas
 │   ├── socios_routes.py            # Rutas de socios (incluye GET /socios/{id})
 │   └── deportes_routes.py          # Rutas de deportes
 │
 └── services/                       # Capa de servicios (acceso a datos / lógica SQL)
-    ├── __pycache__/
     ├── canchas_services.py         # Servicio de canchas (incluye por_id, actualizar, eliminar)
-    ├── reservas_services.py        # Servicio de reservas (con validaciones de solapamiento)
-    ├── socios_services.py          # Servicio de socios (filtros, paginación, por_id, por_email, actualizar)
+    ├── reservas_services.py       # Servicio de reservas (con validaciones de solapamiento)
+    ├── socios_services.py         # Servicio de socios (filtros, paginación, por_id, por_email, actualizar)
     └── deportes_services.py        # Servicio de deportes
 
 --------------------------------------------------------------------------------
@@ -68,6 +64,7 @@ if __name__ == '__main__':
         app.run(debug=True, port=port)
     else:
         app.run(debug=False, host='0.0.0.0', port=port)
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: db.py
@@ -127,6 +124,7 @@ def execute(query: str, params: tuple = None):
             cursor.close()
         if conn and conn.is_connected():
             conn.close()
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: init_db.sql
@@ -196,56 +194,60 @@ INSERT INTO socios (nombre, email, estado) VALUES
 ('Emanuel Ginobili', 'manu.ginobili@club.com', TRUE),
 ('Luciana Aymar', 'luciana.aymar@club.com', TRUE);
 
+
 --------------------------------------------------------------------------------
 ARCHIVO: errors.py
 --------------------------------------------------------------------------------
 
+# errors.py
 from flask import jsonify
 
 
-def build_error_response(code: int, message: str, description: str):
+def build_error_response(code: int | str, message: str, description: str):
     """
     Construye la tupla (Response, HTTP_STATUS) respetando
-    el schema 'Errores' exigido en swagger.yaml.
+    el schema 'Errores' exigido en swagger.yaml (code es string).
     """
+    status_http = int(code) if isinstance(code, int) or str(code).isdigit() else 500
     response = {
         "errors": [
             {
-                "code": code,
+                "code": str(code),
                 "message": message,
                 "level": "error",
                 "description": description
             }
         ]
     }
-    return jsonify(response), code
+    return jsonify(response), status_http
 
 
 # Mapeo uniforme para invocar directamente desde los controllers
 ERRORS = {
     # 400 Bad Request
     "MISSING_REQUIRED_FIELDS": lambda msg="Faltan campos obligatorios": build_error_response(
-        400, msg, "La solicitud no contiene todos los campos obligatorios."
+        "400", msg, "La solicitud no contiene todos los campos obligatorios."
     ),
     "INVALID_FORMAT": lambda msg="Formato de datos inválido": build_error_response(
-        400, msg, "Los tipos o formatos de los datos proporcionados son incorrectos."
+        "400", msg, "Los tipos o formatos de los datos proporcionados son incorrectos."
     ),
 
     # 404 Not Found
     "NOT_FOUND": lambda msg="Recurso no encontrado": build_error_response(
-        404, msg, "El recurso solicitado no existe en la base de datos."
+        "404", msg, "El recurso solicitado no existe en la base de datos."
     ),
 
-    # 409 Conflict (Emails repetidos, transiciones de estado inválidas, solapamientos)
+    # 409 Conflict
     "CONFLICT": lambda msg="Conflicto de negocio": build_error_response(
-        409, msg, "La operación no pudo completarse debido a un conflicto de estado o registros existentes."
+        "409", msg, "La operación no pudo completarse debido a un conflicto de estado o registros existentes."
     ),
 
     # 500 Internal Server Error
     "INTERNAL_SERVER_ERROR": lambda msg="Error interno en el servidor": build_error_response(
-        500, msg, "Ocurrió un error inesperado al procesar la solicitud."
+        "500", msg, "Ocurrió un error inesperado al procesar la solicitud."
     )
 }
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: helpers.py
@@ -302,6 +304,7 @@ def build_hateoas_links(
     Genera la navegación HATEOAS (_first, _prev, _next, _last)
     conservando los filtros de consulta enviados por el cliente.
     """
+    # Excluir _limit y _offset previos para no duplicarlos en la query string
     filtros_limpios = {
         k: v for k, v in query_params.items() if k not in ("_limit", "_offset")
     }
@@ -397,15 +400,15 @@ def validar_intervalo_reserva(inicio_iso: str, fin_iso: str) -> tuple[datetime, 
     if inicio >= fin:
         raise ValueError("La fecha y hora de inicio debe ser anterior a la de fin.")
 
-    if inicio.minute != 0 or inicio.second != 0 or fin.minute != 0 or fin.second != 0:
-        raise ValueError("Las reservas deben iniciar y finalizar en horas en punto (HH:00:00).")
-
     duracion_horas = (fin - inicio).total_seconds() / 3600
     if duracion_horas < 1 or duracion_horas > 3 or not duracion_horas.is_integer():
         raise ValueError("La duración debe ser de entre 1 y 3 horas completas.")
 
     if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
         raise ValueError("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+
+    if inicio.minute != 0 or inicio.second != 0 or fin.minute != 0 or fin.second != 0:
+        raise ValueError("Las reservas deben iniciar y finalizar en horas en punto (HH:00:00).")
 
     return inicio, fin
 
@@ -415,6 +418,7 @@ def es_email_valido(email: Any) -> bool:
     if not isinstance(email, str):
         return False
     return bool(EMAIL_REGEX.match(email.strip()))
+
 
 --------------------------------------------------------------------------------
 
@@ -543,7 +547,7 @@ def consultar_disponibles_controller():
     duracion_horas = (fin_dt - inicio_dt).total_seconds() / 3600
     if duracion_horas < 1 or duracion_horas > 3:
         return ERRORS["CONFLICT"]("La duración de la reserva debe ser de entre 1 y 3 horas completas.")
-    if inicio_dt.hour < 8 or fin_dt.hour > 23:
+    if inicio_dt.hour < 8 or fin_dt.hour > 23 or (fin_dt.hour == 23 and fin_dt.minute > 0):
         return ERRORS["CONFLICT"]("El intervalo debe encontrarse dentro del horario del club (08:00 a 23:00).")
 
     try:
@@ -633,6 +637,7 @@ def eliminar_cancha_controller(cancha_id: int):
 
     return "", 204
 
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -640,9 +645,10 @@ ARCHIVO: controllers/reservas_controllers.py
 --------------------------------------------------------------------------------
 
 # controllers/reservas_controllers.py
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from flask import jsonify, request
 from errors import ERRORS
+from helpers import build_hateoas_links, validar_intervalo_reserva, TZ_ARG
 from services.reservas_services import (
     obtener_reservas_db,
     contar_reservas_db,
@@ -650,14 +656,11 @@ from services.reservas_services import (
     obtener_reserva_por_id_db,
     actualizar_estado_reserva_db
 )
-from helpers import build_hateoas_links
-
-# Zona horaria oficial del club (GMT-3)
-TZ_ARG = timezone(timedelta(hours=-3))
 
 
 def listar_reservas_controller():
     """Devuelve en JSON las reservas paginadas con filtros."""
+    # 1. Validación de paginación
     try:
         limit = int(request.args.get("_limit", 10))
         offset = int(request.args.get("_offset", 0))
@@ -666,6 +669,7 @@ def listar_reservas_controller():
     except ValueError:
         return ERRORS["INVALID_FORMAT"]("_limit y _offset deben ser enteros.")
 
+    # 2. Parseo de filtros de consulta
     filtros: dict[str, int | str] = {}
     try:
         id_cancha = request.args.get("id_cancha")
@@ -732,9 +736,11 @@ def actualizar_estado_controller(reserva_id):
 
     estado_actual = reserva["estado"]
 
+    # Regla: Repetir el estado actual devuelve éxito sin modificar
     if nuevo_estado == estado_actual:
         return "", 204
 
+    # Validaciones temporales de transición
     ahora = datetime.now(TZ_ARG)
     inicio_raw = reserva.get("fecha_hora_inicio")
     fin_raw = reserva.get("fecha_hora_fin")
@@ -774,32 +780,16 @@ def crear_reserva_controller():
     if not all(k in data for k in requeridos):
         return ERRORS["MISSING_REQUIRED_FIELDS"]("Faltan campos obligatorios (id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin).")
 
-    inicio_str = data["fecha_hora_inicio"]
-    fin_str = data["fecha_hora_fin"]
     try:
-        if not isinstance(inicio_str, str) or not isinstance(fin_str, str):
-            raise ValueError
-        inicio = datetime.fromisoformat(inicio_str)
-        fin = datetime.fromisoformat(fin_str)
-    except (TypeError, ValueError):
-        return ERRORS["INVALID_FORMAT"]("Formato de fecha inválido. Se espera ISO 8601 con zona horaria.")
-
-    ahora = datetime.now(TZ_ARG)
-    if inicio <= ahora:
-        return ERRORS["CONFLICT"]("La reserva debe comenzar en el futuro.")
-
-    if inicio >= fin:
-        return ERRORS["INVALID_FORMAT"]("fecha_hora_inicio debe ser menor a fecha_hora_fin.")
-
-    if inicio.minute != 0 or fin.minute != 0:
-        return ERRORS["INVALID_FORMAT"]("Las reservas deben iniciar y finalizar en horas en punto.")
-
-    duracion_horas = (fin - inicio).total_seconds() / 3600
-    if duracion_horas < 1 or duracion_horas > 3:
-        return ERRORS["CONFLICT"]("La duración debe ser de entre 1 y 3 horas completas.")
-
-    if inicio.hour < 8 or fin.hour > 23 or (fin.hour == 23 and fin.minute > 0):
-        return ERRORS["CONFLICT"]("El horario solicitado debe encontrarse entre las 08:00 y las 23:00.")
+        validar_intervalo_reserva(
+            data["fecha_hora_inicio"],
+            data["fecha_hora_fin"]
+        )
+    except ValueError as error:
+        mensaje = str(error)
+        if any(regla in mensaje for regla in ("futuro", "duración", "horario")):
+            return ERRORS["CONFLICT"](mensaje)
+        return ERRORS["INVALID_FORMAT"](mensaje)
 
     reserva, error = crear_reserva_db(data)
 
@@ -819,6 +809,7 @@ def crear_reserva_controller():
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo registrar la reserva en la base de datos.")
 
     return jsonify(reserva), 201
+
 
 --------------------------------------------------------------------------------
 
@@ -915,7 +906,6 @@ def crear_socio_controller():
 
 
 def actualizar_socio_controller(socio_id: int):
-    """Actualiza parcialmente un socio (nombre, email, activo)."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not data:
         return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
@@ -957,6 +947,7 @@ def actualizar_socio_controller(socio_id: int):
 
     return "", 204
 
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -970,8 +961,10 @@ def listar_deportes_controller():
     """Obtiene los deportes y construye la respuesta HTTP en formato JSON."""
     deportes = listar_deportes_db()
     if not deportes:
+        # 204 indica que la consulta no encontró elementos para devolver.
         return "", 204
     return jsonify({"deportes": deportes}), 200
+
 
 --------------------------------------------------------------------------------
 
@@ -992,15 +985,18 @@ from controllers.canchas_controllers import (
 
 canchas_bp = Blueprint('canchas_bp', __name__)
 
+@canchas_bp.route('', methods=['GET'])
 @canchas_bp.route('/', methods=['GET'])
 def listar():
     return listar_canchas_controller()
 
+@canchas_bp.route('', methods=['POST'])
 @canchas_bp.route('/', methods=['POST'])
 def crear():
     return crear_cancha_controller()
 
 @canchas_bp.route('/disponibles', methods=['GET'])
+@canchas_bp.route('/disponibles/', methods=['GET'])
 def consultar_disponibles():
     return consultar_disponibles_controller()
 
@@ -1015,6 +1011,7 @@ def actualizar_cancha(cancha_id):
 @canchas_bp.route('/<int:cancha_id>', methods=['DELETE'])
 def eliminar_cancha(cancha_id):
     return eliminar_cancha_controller(cancha_id)
+
 
 --------------------------------------------------------------------------------
 
@@ -1031,25 +1028,34 @@ from controllers.reservas_controllers import (
     actualizar_estado_controller
 )
 
+# Blueprint para agrupar los endpoints de reservas
 reservas_bp = Blueprint('reservas_bp', __name__)
+
 
 @reservas_bp.route('', methods=['GET'])
 @reservas_bp.route('/', methods=['GET'])
 def listar_reservas():
     return listar_reservas_controller()
 
+
+# POST solicita la creación de una reserva
 @reservas_bp.route('', methods=['POST'])
 @reservas_bp.route('/', methods=['POST'])
 def crear_reserva():
     return crear_reserva_controller()
 
+
+# GET /reservas/{id} devuelve el detalle de una reserva específica
 @reservas_bp.route('/<int:reserva_id>', methods=['GET'])
 def obtener_reserva(reserva_id):
     return obtener_reserva_controller(reserva_id)
 
+
+# PUT /reservas/{id}/estado cambia el estado respetando las transiciones
 @reservas_bp.route('/<int:reserva_id>/estado', methods=['PUT'])
 def actualizar_estado_reserva(reserva_id):
     return actualizar_estado_controller(reserva_id)
+
 
 --------------------------------------------------------------------------------
 
@@ -1086,20 +1092,24 @@ def crear_socio():
 def actualizar_socio(socio_id):
     return actualizar_socio_controller(socio_id)
 
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
 ARCHIVO: routes/deportes_routes.py
 --------------------------------------------------------------------------------
 
+# routes/deportes_routes.py
 from flask import Blueprint
 from controllers.deportes_controllers import listar_deportes_controller
 
 deportes_bp = Blueprint('deportes_bp', __name__)
 
+@deportes_bp.route('', methods=['GET'])
 @deportes_bp.route('/', methods=['GET'])
 def listar_deportes():
     return listar_deportes_controller()
+
 
 --------------------------------------------------------------------------------
 
@@ -1109,6 +1119,7 @@ ARCHIVO: services/canchas_services.py
 
 # services/canchas_services.py
 from typing import Any
+
 from db import execute
 
 
@@ -1148,10 +1159,12 @@ def obtener_canchas_db(
     query = f"""
         SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
         FROM canchas{where}
-        ORDER BY id_cancha
+        ORDER BY id_cancha ASC
         LIMIT %s OFFSET %s;
     """
-    return execute(query, params + (limit, offset))
+    parametros = list(params)
+    parametros.extend([limit, offset])
+    return execute(query, tuple(parametros))
 
 
 def crear_cancha_db(datos: dict) -> tuple[int | None, str | None]:
@@ -1168,6 +1181,7 @@ def crear_cancha_db(datos: dict) -> tuple[int | None, str | None]:
         INSERT INTO canchas (nombre, id_deporte, precio_hora, techada, activa, precio_reserva)
         VALUES (%s, %s, %s, %s, %s, %s);
     """
+
     cancha_id = execute(query, (
         datos["nombre"],
         datos["id_deporte"],
@@ -1199,6 +1213,7 @@ def contar_canchas_disponibles_db(inicio: str, fin: str, id_deporte: int | None 
     if techada is not None:
         query += " AND c.techada = %s"
         params.append(techada)
+
     res = execute(query, tuple(params))
     return res[0]["total"] if res else 0
 
@@ -1230,10 +1245,11 @@ def obtener_canchas_disponibles_db(
     if techada is not None:
         query += " AND c.techada = %s"
         params.append(techada)
+
     query += " ORDER BY c.id_cancha LIMIT %s OFFSET %s;"
     params.extend([limit, offset])
-    return execute(query, tuple(params))
 
+    return execute(query, tuple(params))
 
 def obtener_cancha_por_id_db(cancha_id: int) -> dict[str, Any] | None:
     query = """
@@ -1290,6 +1306,7 @@ def eliminar_cancha_db(cancha_id: int) -> int | None:
     query = "DELETE FROM canchas WHERE id_cancha = %s;"
     return execute(query, (cancha_id,))
 
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -1311,6 +1328,7 @@ def _construir_condiciones(
     """Construye condiciones parametrizadas compartidas por las consultas."""
     condiciones = []
     parametros: list[int | str] = []
+
     if not filtros:
         return condiciones, parametros
 
@@ -1326,6 +1344,7 @@ def _construir_condiciones(
         if valor is not None:
             condiciones.append(condicion_sql)
             parametros.append(valor)
+
     return condiciones, parametros
 
 
@@ -1335,6 +1354,7 @@ def contar_reservas_db(filtros: FiltrosReserva | None = None) -> int | None:
     query = "SELECT COUNT(*) AS total FROM reservas"
     if condiciones:
         query += " WHERE " + " AND ".join(condiciones)
+
     resultado = execute(query, tuple(parametros))
     if not isinstance(resultado, list):
         return None
@@ -1357,30 +1377,47 @@ def obtener_reservas_db(
     """
     if condiciones:
         query += " WHERE " + " AND ".join(condiciones)
+
     query += " ORDER BY id ASC LIMIT %s OFFSET %s;"
     parametros.extend([limit, offset])
+
     filas = execute(query, tuple(parametros))
     if not isinstance(filas, list):
         return None
+
     for reserva in filas:
-        reserva["fecha_hora_inicio"] = parsear_fecha_iso(reserva["fecha_hora_inicio"])
-        reserva["fecha_hora_fin"] = parsear_fecha_iso(reserva["fecha_hora_fin"])
+        reserva["fecha_hora_inicio"] = parsear_fecha_iso(
+            reserva["fecha_hora_inicio"])
+        reserva["fecha_hora_fin"] = parsear_fecha_iso(
+            reserva["fecha_hora_fin"])
+
     return filas
 
 
 def obtener_reserva_por_id_db(reserva_id: int) -> dict[str, Any] | None:
     """Obtiene una reserva por su identificador."""
-    query = "SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica AS precio_hora, total AS precio_total FROM reservas WHERE id = %s;"
+    query = """
+        SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin,
+               estado, tarifa_historica AS precio_hora, total AS precio_total
+        FROM reservas
+        WHERE id = %s;
+    """
     resultado = execute(query, (reserva_id,))
     if not isinstance(resultado, list) or not resultado:
         return None
+
     reserva = resultado[0]
-    reserva["fecha_hora_inicio"] = parsear_fecha_iso(reserva["fecha_hora_inicio"])
-    reserva["fecha_hora_fin"] = parsear_fecha_iso(reserva["fecha_hora_fin"])
+    reserva["fecha_hora_inicio"] = parsear_fecha_iso(
+        reserva["fecha_hora_inicio"])
+    reserva["fecha_hora_fin"] = parsear_fecha_iso(
+        reserva["fecha_hora_fin"])
     return reserva
 
 
-def actualizar_estado_reserva_db(reserva_id: int, nuevo_estado: str) -> int | None:
+def actualizar_estado_reserva_db(
+    reserva_id: int,
+    nuevo_estado: str,
+) -> int | None:
     """Actualiza el estado de una reserva."""
     query = "UPDATE reservas SET estado = %s WHERE id = %s;"
     resultado = execute(query, (nuevo_estado, reserva_id))
@@ -1395,6 +1432,7 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     if not isinstance(inicio_iso, str) or not isinstance(fin_iso, str):
         return None, "INVALID_DATE"
 
+    # 1. Validar existencia y estado del socio
     query_socio = "SELECT id_socio, estado FROM socios WHERE id_socio = %s;"
     socio_res = execute(query_socio, (id_socio,))
     if not socio_res:
@@ -1402,6 +1440,7 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     if not socio_res[0]["estado"]:
         return None, "SOCIO_INACTIVE"
 
+    # 2. Validar existencia y estado de la cancha
     query_cancha = "SELECT id_cancha, precio_hora, activa FROM canchas WHERE id_cancha = %s;"
     cancha_res = execute(query_cancha, (id_cancha,))
     if not cancha_res:
@@ -1410,15 +1449,18 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     if not cancha["activa"]:
         return None, "CANCHA_INACTIVE"
 
+    # 3. Validar solapamiento de cancha (reservas confirmadas)
     query_cancha_solapada = """
         SELECT COUNT(*) AS total FROM reservas
         WHERE id_cancha = %s AND estado = 'confirmada'
           AND fecha_hora_inicio < %s AND fecha_hora_fin > %s;
     """
-    res_solapada = execute(query_cancha_solapada, (id_cancha, fin_iso, inicio_iso))
+    res_solapada = execute(query_cancha_solapada,
+                           (id_cancha, fin_iso, inicio_iso))
     if res_solapada and res_solapada[0]["total"] > 0:
         return None, "OVERLAP_CANCHA"
 
+    # 4. Validar solapamiento de socio (reservas confirmadas)
     query_socio_solapado = """
         SELECT COUNT(*) AS total FROM reservas
         WHERE id_socio = %s AND estado = 'confirmada'
@@ -1428,17 +1470,20 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     if res_socio and res_socio[0]["total"] > 0:
         return None, "OVERLAP_SOCIO"
 
+    # 5. Cálculo de importe y congelamiento de tarifa
     dt_inicio = datetime.fromisoformat(inicio_iso)
     dt_fin = datetime.fromisoformat(fin_iso)
     duracion_horas = int((dt_fin - dt_inicio).total_seconds() // 3600)
     precio_hora = cancha["precio_hora"]
     total = duracion_horas * precio_hora
 
+    # 6. Inserción
     query_insert = """
         INSERT INTO reservas (id_cancha, id_socio, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica, total)
         VALUES (%s, %s, %s, %s, 'confirmada', %s, %s);
     """
-    nuevo_id = execute(query_insert, (id_cancha, id_socio, inicio_iso, fin_iso, precio_hora, total))
+    nuevo_id = execute(query_insert, (id_cancha, id_socio,
+                       inicio_iso, fin_iso, precio_hora, total))
     if not nuevo_id:
         return None, "DB_ERROR"
 
@@ -1454,6 +1499,7 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     }
     return reserva_creada, None
 
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -1463,6 +1509,7 @@ ARCHIVO: services/socios_services.py
 # services/socios_services.py
 from typing import Any
 from db import execute
+
 
 def _construir_filtros_socios(filtros: dict):
     condiciones = []
@@ -1510,39 +1557,50 @@ def obtener_socio_por_id_db(socio_id: int) -> dict[str, Any] | None:
         return None
     return filas[0]
 
+
 def obtener_socio_por_email_db(email: str, excluir_id: int | None = None) -> dict[str, Any] | None:
     query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE email = %s"
     params: list[str | int] = [email]
     if excluir_id is not None:
         query += " AND id_socio != %s"
         params.append(excluir_id)
+
     filas = execute(query, tuple(params))
     if not isinstance(filas, list) or not filas:
         return None
     return filas[0]
+
 
 def guardar_nuevo_socio(nombre: str, email: str) -> int | None:
     query = "INSERT INTO socios (nombre, email, estado) VALUES (%s, %s, TRUE);"
     resultado = execute(query, (nombre, email))
     return resultado if isinstance(resultado, int) else None
 
+
 def actualizar_socio_db(socio_id: int, campos: dict[str, Any]) -> int | None:
     set_clauses = []
     params = []
+
     if "nombre" in campos:
         set_clauses.append("nombre = %s")
         params.append(campos["nombre"])
+
     if "email" in campos:
         set_clauses.append("email = %s")
         params.append(campos["email"])
+
     if "activo" in campos:
         set_clauses.append("estado = %s")
         params.append(campos["activo"])
+
     if not set_clauses:
         return 0
+
     query = f"UPDATE socios SET {', '.join(set_clauses)} WHERE id_socio = %s;"
     params.append(socio_id)
+
     return execute(query, tuple(params))
+
 
 --------------------------------------------------------------------------------
 
@@ -1553,26 +1611,21 @@ ARCHIVO: services/deportes_services.py
 from db import execute
 
 def listar_deportes_db():
+    """Consulta los deportes y adapta el nombre de la clave para la API."""
     query = """
-        SELECT id_deporte AS id, nombre
+        SELECT
+            -- El esquema usa id_deporte; la respuesta pública usa id.
+            id_deporte AS id,
+            nombre
         FROM deportes
+        -- ASC es el orden predeterminado: primero el menor identificador.
         ORDER BY id_deporte ASC;
     """
+    # execute devuelve una lista de filas como diccionarios.
     return execute(query)
 
---------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
-ARCHIVO: .env
---------------------------------------------------------------------------------
-
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=gabriel
-MYSQL_PASSWORD=Permanganato64
-MYSQL_DATABASE=club_deportivo
-FLASK_PORT=5001
-ENV=dev
 
 --------------------------------------------------------------------------------
 ARCHIVO: .env.example
@@ -1583,8 +1636,10 @@ MYSQL_PORT=
 MYSQL_USER=
 MYSQL_PASSWORD=
 MYSQL_DATABASE=
+
 FLASK_PORT=
 ENV=
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: .gitignore
@@ -1616,6 +1671,7 @@ __pycache__/
 *.log
 *.sqlite3
 
+
 --------------------------------------------------------------------------------
 ARCHIVO: requirements.txt
 --------------------------------------------------------------------------------
@@ -1623,6 +1679,7 @@ ARCHIVO: requirements.txt
 flask
 mysql-connector-python
 python-dotenv
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: swagger.yaml (Resumen - Estructura completa con extensiones)
@@ -1648,7 +1705,7 @@ ENDPOINTS:
   - GET    /reservas/{id}                      -> Obtener reserva por ID
   - PUT    /reservas/{id}/estado               -> Cambiar estado de reserva
 
-  EXTENSIONES OPCIONALES:
+  EXTENSIONES OPCIONALES (definidas en Swagger; no implementadas en las rutas actuales):
   - GET    /bloqueos                           -> Listar bloqueos de mantenimiento
   - POST   /bloqueos                           -> Crear bloqueo de mantenimiento
   - DELETE /bloqueos/{id}                      -> Eliminar bloqueo
@@ -1679,6 +1736,8 @@ ARCHIVO: README.md
 
 Trabajo práctico de backend para la materia **"Introducción al Desarrollo de Software"** — Facultad de Ingeniería de la Universidad de Buenos Aires (FIUBA).
 
+---
+
 ## 👥 Integrantes
 
 | Nombre y Apellido | Padrón |
@@ -1690,6 +1749,8 @@ Trabajo práctico de backend para la materia **"Introducción al Desarrollo de S
 | Vanessa Michuy | 115947 |
 | Adriana Camila Rodriguez Caballero | 116394 |
 
+---
+
 ## 🚀 Características Principales
 
 * **Gestión de Recursos:** Administración integral de canchas, deportes y socios del club.
@@ -1697,6 +1758,8 @@ Trabajo práctico de backend para la materia **"Introducción al Desarrollo de S
 * **Ciclo de Vida de Reservas:** Creación en estado `confirmada`, cálculo de importes, congelamiento de tarifa histórica y transiciones controladas a `cancelada` o `finalizada`.
 * **Paginación y Estándares HATEOAS:** Respuestas paginadas con `_limit` y `_offset`, acompañadas por enlaces de navegación (`_first`, `_prev`, `_next`, `_last`) y filtros combinables por `AND`.
 * **Contrato OpenAPI 3.0:** Respuestas serializadas en JSON y manejo estructurado de errores (`400`, `404`, `409`, `500`) según la especificación formal de `swagger.yaml`.
+
+---
 
 ## 🛠️ Tecnologías y Requisitos Previos
 
@@ -1706,14 +1769,18 @@ Trabajo práctico de backend para la materia **"Introducción al Desarrollo de S
 * **Driver:** `mysql-connector-python`
 * **Variables de Entorno:** `python-dotenv`
 
+---
+
 ## 📁 Estructura del Proyecto
+
+El backend implementa una arquitectura desacoplada por capas:
 
 ```text
 fiuba-ids-flask/
 ├── app.py                 # Punto de entrada de la aplicación y registro de Blueprints
 ├── db.py                  # Conexión centralizada a MySQL y ejecutor de consultas
 ├── errors.py              # Respuestas estandarizadas de error según esquema Swagger
-├── helpers.py             # Funciones utilitarias compartidas (paginación, HATEOAS, validaciones)
+├── helpers.py             # Funciones utilitarias compartidas
 ├── init_db.sql            # Script de inicialización de tablas y precarga de deportes
 ├── swagger.yaml           # Contrato OpenAPI 3.0 de la API
 ├── requirements.txt       # Dependencias del proyecto
@@ -1723,19 +1790,30 @@ fiuba-ids-flask/
 └── services/              # Lógica de negocio y consultas SQL parametrizadas
 ```
 
+---
+
 ## ⚙️ Instalación y Puesta en Marcha
 
+Sigue estos pasos en la terminal desde el directorio raíz del proyecto para levantar la aplicación:
+
 ### 1. Configurar Variables de Entorno
+
+Clona la plantilla de variables de entorno y edítala con tus credenciales locales de MySQL:
+
 ```bash
 cp .env.example .env
 ```
 
+> **Nota:** No olvides asignar las credenciales correspondientes a tu servidor local de MySQL en el archivo `.env` recién creado. Este archivo está excluido del control de versiones.
+
 ### 2. Crear y Activar el Entorno Virtual
+
 - **Linux / macOS:**
   ```bash
   python3 -m venv .venv
   source .venv/bin/activate
   ```
+
 - **Windows (CMD o PowerShell):**
   ```cmd
   python -m venv .venv
@@ -1743,21 +1821,33 @@ cp .env.example .env
   ```
 
 ### 3. Instalar Dependencias
+
+Actualiza `pip` e instala los paquetes requeridos:
+
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
 ### 4. Inicializar la Base de Datos
+
+Ejecuta el script SQL para crear la base de datos `club_deportivo`, estructurar las tablas e insertar los deportes precargados:
+
 ```bash
 mysql -u root -p < init_db.sql
 ```
 
 ### 5. Iniciar la API
+
+Corre el servidor de Flask:
+
 ```bash
 python3 app.py
 ```
+
 El servidor quedará disponible por defecto en: [http://localhost:5000](http://localhost:5000) (o en el puerto definido por `FLASK_PORT` en tu `.env`).
+
+---
 
 ## 📋 Supuestos y Reglas de Negocio
 
@@ -1774,6 +1864,8 @@ El servidor quedará disponible por defecto en: [http://localhost:5000](http://l
 * **Baja Lógica de Canchas:** No se permite eliminar físicamente una cancha que posea reservas históricas o activas (retorna `409 Conflict`). En su lugar, se realiza una baja lógica desactivándola.
 * **Cancelaciones:** La cancelación (`cancelada`) solo es válida antes del horario de inicio del turno.
 * **Finalización:** El cambio de estado a `finalizada` únicamente puede aplicarse una vez transcurrido el horario de finalización del turno.
+
+---
 
 ## 🧪 Ejemplos de Solicitudes (cURL)
 
@@ -1793,6 +1885,7 @@ curl -X POST http://localhost:5000/socios \
 ```bash
 curl -X GET "http://localhost:5000/reservas?estado=confirmada&_limit=5&_offset=0"
 ```
+
 
 ================================================================================
   FIN DEL DOCUMENTO

@@ -81,7 +81,7 @@ def build_hateoas_links(
 
 def parsear_booleano(valor: Any, nombre_campo: str = "campo") -> bool | None:
     """
-    Convierte parámetros de texto 'true', 'false', '1', '0' a bool nativo.
+    Convierte los textos 'true' y 'false' a bool nativo (el enunciado no admite otros valores).
     Lanza ValueError si el valor no representa un booleano válido.
     """
     if valor is None:
@@ -89,13 +89,38 @@ def parsear_booleano(valor: Any, nombre_campo: str = "campo") -> bool | None:
     if isinstance(valor, bool):
         return valor
 
-    val_str = str(valor).strip().lower()
-    if val_str in ("true", "1"):
+    if valor == "true":
         return True
-    if val_str in ("false", "0"):
+    if valor == "false":
         return False
 
     raise ValueError(f"El campo '{nombre_campo}' debe ser un booleano (true o false).")
+
+
+# ----------------------------------------------------------------------
+# 2b. Enteros y parámetros permitidos
+# ----------------------------------------------------------------------
+
+def parsear_entero_positivo(valor: Any, nombre_campo: str = "campo") -> int | None:
+    """
+    Convierte un parámetro de texto a entero positivo.
+    Lanza ValueError si no es un entero mayor a cero.
+    """
+    if valor is None:
+        return None
+    if not str(valor).isdigit() or int(valor) < 1:
+        raise ValueError(f"El campo '{nombre_campo}' debe ser un entero positivo.")
+    return int(valor)
+
+
+def validar_campos_permitidos(recibidos, permitidos: set[str]) -> None:
+    """
+    Rechaza campos o parámetros que no forman parte del contrato.
+    Lanza ValueError indicando cuáles sobran.
+    """
+    desconocidos = set(recibidos) - permitidos
+    if desconocidos:
+        raise ValueError(f"Campos no permitidos: {', '.join(sorted(desconocidos))}.")
 
 
 # ----------------------------------------------------------------------

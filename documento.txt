@@ -24,23 +24,23 @@ fiuba-ids-flask/
 │
 ├── controllers/                    # Capa de controladores (lógica de negocio HTTP)
 │   ├── __pycache__/
-│   ├── canchas_controllers.py      # Controlador de canchas
-│   ├── reservas_controllers.py     # Controlador de reservas
-│   ├── socios_controllers.py       # Controlador de socios (incluye PATCH/actualizar)
+│   ├── canchas_controllers.py      # Controlador de canchas (incluye GET/PATCH/DELETE/{id})
+│   ├── reservas_controllers.py     # Controlador de reservas (incluye cambio de estado)
+│   ├── socios_controllers.py       # Controlador de socios (incluye GET/{id}, paginación, filtros)
 │   └── deportes_controllers.py     # Controlador de deportes
 │
 ├── routes/                         # Definición de rutas (Blueprints de Flask)
 │   ├── __pycache__/
-│   ├── canchas_routes.py           # Rutas de canchas
+│   ├── canchas_routes.py           # Rutas de canchas (incluye GET/PATCH/DELETE /{id})
 │   ├── reservas_routes.py          # Rutas de reservas
-│   ├── socios_routes.py            # Rutas de socios (incluye PATCH /socios/{id})
+│   ├── socios_routes.py            # Rutas de socios (incluye GET /socios/{id})
 │   └── deportes_routes.py          # Rutas de deportes
 │
 └── services/                       # Capa de servicios (acceso a datos / lógica SQL)
     ├── __pycache__/
-    ├── canchas_services.py         # Servicio de canchas
-    ├── reservas_services.py        # Servicio de reservas
-    ├── socios_services.py          # Servicio de socios (incluye obtener_por_id, por_email, actualizar)
+    ├── canchas_services.py         # Servicio de canchas (incluye por_id, actualizar, eliminar)
+    ├── reservas_services.py        # Servicio de reservas (con validaciones de solapamiento)
+    ├── socios_services.py          # Servicio de socios (filtros, paginación, por_id, por_email, actualizar)
     └── deportes_services.py        # Servicio de deportes
 
 --------------------------------------------------------------------------------
@@ -171,6 +171,30 @@ CREATE TABLE IF NOT EXISTS reservas (
     FOREIGN KEY (id_cancha) REFERENCES canchas(id_cancha),
     FOREIGN KEY (id_socio) REFERENCES socios(id_socio)
 );
+
+-- ============================================================
+-- PRECARGA OBLIGATORIA DE DEPORTES
+-- ============================================================
+INSERT INTO deportes (nombre, cantidad_jugadores) VALUES
+('Fútbol 5', 10),
+('Fútbol 7', 14),
+('Fútbol 11', 22),
+('Básquet', 10),
+('Pádel', 4),
+('Tenis', 2);
+
+-- ============================================================
+-- DATOS SEMILLA DE PRUEBA
+-- ============================================================
+INSERT INTO canchas (nombre, id_deporte, precio_hora, techada, activa, precio_reserva) VALUES
+('Cancha 1 - Sintético', 1, 1200000, FALSE, TRUE, 1200000),
+('Cancha Central Tenis', 6, 1500000, TRUE, TRUE, 1500000),
+('Pádel Cristal 1', 5, 1000000, TRUE, TRUE, 1000000);
+
+INSERT INTO socios (nombre, email, estado) VALUES
+('Carlos Tevez', 'carlos.tevez@club.com', TRUE),
+('Emanuel Ginobili', 'manu.ginobili@club.com', TRUE),
+('Luciana Aymar', 'luciana.aymar@club.com', TRUE);
 
 --------------------------------------------------------------------------------
 ARCHIVO: errors.py
@@ -407,7 +431,11 @@ from services.canchas_services import (
     obtener_canchas_db,
     crear_cancha_db,
     obtener_canchas_disponibles_db,
-    contar_canchas_db
+    contar_canchas_db,
+    obtener_cancha_por_id_db,
+    actualizar_cancha_db,
+    contar_reservas_por_cancha_db,
+    eliminar_cancha_db
 )
 
 def listar_canchas_controller():
@@ -538,6 +566,73 @@ def consultar_disponibles_controller():
         return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la disponibilidad en la base de datos.")
     return jsonify({"canchas": canchas}), 200
 
+def obtener_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+    return jsonify(cancha), 200
+
+
+def actualizar_cancha_controller(cancha_id: int):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
+
+    cancha_actual = obtener_cancha_por_id_db(cancha_id)
+    if not cancha_actual:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    campos_a_actualizar = {}
+
+    if "nombre" in data:
+        nombre = data["nombre"]
+        if not isinstance(nombre, str) or not nombre.strip():
+            return ERRORS["INVALID_FORMAT"]("El campo 'nombre' debe ser un texto no vacío.")
+        campos_a_actualizar["nombre"] = nombre.strip()
+
+    if "precio_hora" in data:
+        precio = data["precio_hora"]
+        if isinstance(precio, bool) or not isinstance(precio, int) or precio <= 0:
+            return ERRORS["INVALID_FORMAT"]("El campo 'precio_hora' debe ser un entero mayor a cero.")
+        campos_a_actualizar["precio_hora"] = precio
+
+    if "techada" in data:
+        techada = data["techada"]
+        if not isinstance(techada, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'techada' debe ser booleano.")
+        campos_a_actualizar["techada"] = techada
+
+    if "activa" in data:
+        activa = data["activa"]
+        if not isinstance(activa, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'activa' debe ser booleano.")
+        campos_a_actualizar["activa"] = activa
+
+    if not campos_a_actualizar:
+        return ERRORS["INVALID_FORMAT"]("No se enviaron campos válidos para actualizar.")
+
+    filas = actualizar_cancha_db(cancha_id, campos_a_actualizar)
+    if filas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al actualizar la cancha en la base de datos.")
+
+    return "", 204
+
+
+def eliminar_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    total_reservas = contar_reservas_por_cancha_db(cancha_id)
+    if total_reservas is not None and total_reservas > 0:
+        return ERRORS["CONFLICT"]("No se puede eliminar la cancha porque posee reservas asociadas. Utilice PATCH para desactivarla.")
+
+    filas = eliminar_cancha_db(cancha_id)
+    if filas is None or filas == 0:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo eliminar la cancha de la base de datos.")
+
+    return "", 204
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -638,7 +733,7 @@ def actualizar_estado_controller(reserva_id):
     estado_actual = reserva["estado"]
 
     if nuevo_estado == estado_actual:
-        return jsonify(reserva), 200
+        return "", 204
 
     ahora = datetime.now(TZ_ARG)
     inicio_raw = reserva.get("fecha_hora_inicio")
@@ -661,14 +756,14 @@ def actualizar_estado_controller(reserva_id):
         else:
             return ERRORS["CONFLICT"](f"Transición no permitida de '{estado_actual}' a '{nuevo_estado}'.")
     else:
+        # Ni 'cancelada' ni 'finalizada' admiten nuevas transiciones
         return ERRORS["CONFLICT"](f"No se permite modificar una reserva en estado '{estado_actual}'.")
 
     filas_afectadas = actualizar_estado_reserva_db(reserva_id, nuevo_estado)
     if filas_afectadas is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo actualizar el estado de la reserva.")
 
-    reserva["estado"] = nuevo_estado
-    return jsonify(reserva), 200
+    return "", 204
 
 
 def crear_reserva_controller():
@@ -734,9 +829,10 @@ ARCHIVO: controllers/socios_controllers.py
 # controllers/socios_controllers.py
 from flask import jsonify, request
 from errors import ERRORS
-from helpers import es_email_valido
+from helpers import es_email_valido, parsear_paginacion, parsear_booleano, build_hateoas_links
 from services.socios_services import (
-    obtener_todos_los_socios,
+    obtener_socios_db,
+    contar_socios_db,
     obtener_socio_por_id_db,
     obtener_socio_por_email_db,
     guardar_nuevo_socio,
@@ -745,11 +841,44 @@ from services.socios_services import (
 
 
 def listar_socios_controller():
-    """Devuelve en JSON la lista de socios activos."""
-    socios = obtener_todos_los_socios()
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+        filtros: dict = {}
+        nombre = request.args.get("nombre")
+        if nombre:
+            filtros["nombre"] = nombre.strip()
+
+        activo = parsear_booleano(request.args.get("activo"), "activo")
+        if activo is not None:
+            filtros["activo"] = activo
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
+
+    total = contar_socios_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
+
+    socios = obtener_socios_db(filtros, limit, offset)
     if socios is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
-    return jsonify({"socios": socios}), 200
+
+    if not socios and total == 0:
+        return "", 204
+
+    links = build_hateoas_links(
+        request.base_url, limit, offset, total, request.args.to_dict()
+    )
+    return jsonify({"socios": socios, "_links": links}), 200
+
+
+def obtener_socio_controller(socio_id: int):
+    socio = obtener_socio_por_id_db(socio_id)
+    if not socio:
+        return ERRORS["NOT_FOUND"](f"No se encontró el socio con id {socio_id}.")
+    return jsonify(socio), 200
 
 
 def crear_socio_controller():
@@ -855,7 +984,10 @@ from flask import Blueprint
 from controllers.canchas_controllers import (
     listar_canchas_controller,
     crear_cancha_controller,
-    consultar_disponibles_controller
+    consultar_disponibles_controller,
+    obtener_cancha_controller,
+    actualizar_cancha_controller,
+    eliminar_cancha_controller
 )
 
 canchas_bp = Blueprint('canchas_bp', __name__)
@@ -871,6 +1003,18 @@ def crear():
 @canchas_bp.route('/disponibles', methods=['GET'])
 def consultar_disponibles():
     return consultar_disponibles_controller()
+
+@canchas_bp.route('/<int:cancha_id>', methods=['GET'])
+def obtener_cancha(cancha_id):
+    return obtener_cancha_controller(cancha_id)
+
+@canchas_bp.route('/<int:cancha_id>', methods=['PATCH'])
+def actualizar_cancha(cancha_id):
+    return actualizar_cancha_controller(cancha_id)
+
+@canchas_bp.route('/<int:cancha_id>', methods=['DELETE'])
+def eliminar_cancha(cancha_id):
+    return eliminar_cancha_controller(cancha_id)
 
 --------------------------------------------------------------------------------
 
@@ -918,6 +1062,7 @@ from flask import Blueprint
 from controllers.socios_controllers import (
     listar_socios_controller,
     crear_socio_controller,
+    obtener_socio_controller,
     actualizar_socio_controller
 )
 
@@ -927,6 +1072,10 @@ socios_bp = Blueprint('socios_bp', __name__)
 @socios_bp.route('/', methods=['GET'])
 def listar_socios():
     return listar_socios_controller()
+
+@socios_bp.route('/<int:socio_id>', methods=['GET'])
+def obtener_socio(socio_id):
+    return obtener_socio_controller(socio_id)
 
 @socios_bp.route('', methods=['POST'])
 @socios_bp.route('/', methods=['POST'])
@@ -1085,6 +1234,62 @@ def obtener_canchas_disponibles_db(
     params.extend([limit, offset])
     return execute(query, tuple(params))
 
+
+def obtener_cancha_por_id_db(cancha_id: int) -> dict[str, Any] | None:
+    query = """
+        SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
+        FROM canchas
+        WHERE id_cancha = %s;
+    """
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return None
+    return resultado[0]
+
+
+def actualizar_cancha_db(cancha_id: int, campos: dict[str, Any]) -> int | None:
+    set_clauses = []
+    params = []
+
+    if "nombre" in campos:
+        set_clauses.append("nombre = %s")
+        params.append(campos["nombre"])
+
+    if "precio_hora" in campos:
+        set_clauses.append("precio_hora = %s")
+        params.append(campos["precio_hora"])
+        set_clauses.append("precio_reserva = %s")
+        params.append(campos["precio_hora"])
+
+    if "techada" in campos:
+        set_clauses.append("techada = %s")
+        params.append(campos["techada"])
+
+    if "activa" in campos:
+        set_clauses.append("activa = %s")
+        params.append(campos["activa"])
+
+    if not set_clauses:
+        return 0
+
+    query = f"UPDATE canchas SET {', '.join(set_clauses)} WHERE id_cancha = %s;"
+    params.append(cancha_id)
+
+    return execute(query, tuple(params))
+
+
+def contar_reservas_por_cancha_db(cancha_id: int) -> int | None:
+    query = "SELECT COUNT(*) AS total FROM reservas WHERE id_cancha = %s;"
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return 0
+    return int(resultado[0]["total"])
+
+
+def eliminar_cancha_db(cancha_id: int) -> int | None:
+    query = "DELETE FROM canchas WHERE id_cancha = %s;"
+    return execute(query, (cancha_id,))
+
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
@@ -1100,7 +1305,10 @@ from helpers import parsear_fecha_iso
 FiltrosReserva = dict[str, int | str]
 
 
-def _construir_condiciones(filtros: FiltrosReserva | None) -> tuple[list[str], list[int | str]]:
+def _construir_condiciones(
+    filtros: FiltrosReserva | None,
+) -> tuple[list[str], list[int | str]]:
+    """Construye condiciones parametrizadas compartidas por las consultas."""
     condiciones = []
     parametros: list[int | str] = []
     if not filtros:
@@ -1122,6 +1330,7 @@ def _construir_condiciones(filtros: FiltrosReserva | None) -> tuple[list[str], l
 
 
 def contar_reservas_db(filtros: FiltrosReserva | None = None) -> int | None:
+    """Cuenta las reservas que coinciden con los filtros."""
     condiciones, parametros = _construir_condiciones(filtros)
     query = "SELECT COUNT(*) AS total FROM reservas"
     if condiciones:
@@ -1134,7 +1343,12 @@ def contar_reservas_db(filtros: FiltrosReserva | None = None) -> int | None:
     return int(resultado[0]["total"])
 
 
-def obtener_reservas_db(filtros: FiltrosReserva | None = None, limit: int = 10, offset: int = 0) -> list[dict[str, Any]] | None:
+def obtener_reservas_db(
+    filtros: FiltrosReserva | None = None,
+    limit: int = 10,
+    offset: int = 0,
+) -> list[dict[str, Any]] | None:
+    """Consulta las reservas con filtros y paginación."""
     condiciones, parametros = _construir_condiciones(filtros)
     query = """
         SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin,
@@ -1155,6 +1369,7 @@ def obtener_reservas_db(filtros: FiltrosReserva | None = None, limit: int = 10, 
 
 
 def obtener_reserva_por_id_db(reserva_id: int) -> dict[str, Any] | None:
+    """Obtiene una reserva por su identificador."""
     query = "SELECT id, id_socio, id_cancha, fecha_hora_inicio, fecha_hora_fin, estado, tarifa_historica AS precio_hora, total AS precio_total FROM reservas WHERE id = %s;"
     resultado = execute(query, (reserva_id,))
     if not isinstance(resultado, list) or not resultado:
@@ -1166,6 +1381,7 @@ def obtener_reserva_por_id_db(reserva_id: int) -> dict[str, Any] | None:
 
 
 def actualizar_estado_reserva_db(reserva_id: int, nuevo_estado: str) -> int | None:
+    """Actualiza el estado de una reserva."""
     query = "UPDATE reservas SET estado = %s WHERE id = %s;"
     resultado = execute(query, (nuevo_estado, reserva_id))
     return resultado if isinstance(resultado, int) else None
@@ -1248,9 +1464,44 @@ ARCHIVO: services/socios_services.py
 from typing import Any
 from db import execute
 
-def obtener_todos_los_socios():
-    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE estado = %s;"
-    return execute(query, (True,))
+def _construir_filtros_socios(filtros: dict):
+    condiciones = []
+    params: list[Any] = []
+
+    if "nombre" in filtros:
+        condiciones.append("nombre LIKE %s")
+        params.append(f"%{filtros['nombre']}%")
+
+    if "activo" in filtros:
+        condiciones.append("estado = %s")
+        params.append(filtros["activo"])
+
+    where = f" WHERE {' AND '.join(condiciones)}" if condiciones else ""
+    return where, tuple(params)
+
+
+def contar_socios_db(filtros: dict | None = None) -> int | None:
+    where, params = _construir_filtros_socios(filtros or {})
+    resultado = execute(f"SELECT COUNT(*) AS total FROM socios{where};", params)
+    return resultado[0]["total"] if resultado else None
+
+
+def obtener_socios_db(
+    filtros: dict | None = None,
+    limit: int = 10,
+    offset: int = 0
+) -> list[dict] | None:
+    where, params = _construir_filtros_socios(filtros or {})
+    query = f"""
+        SELECT id_socio AS id, nombre, email, estado AS activo
+        FROM socios{where}
+        ORDER BY id_socio ASC
+        LIMIT %s OFFSET %s;
+    """
+    parametros = list(params)
+    parametros.extend([limit, offset])
+    return execute(query, tuple(parametros))
+
 
 def obtener_socio_por_id_db(socio_id: int) -> dict[str, Any] | None:
     query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE id_socio = %s;"

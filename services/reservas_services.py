@@ -1,22 +1,10 @@
-from datetime import datetime, timezone, timedelta
+# reservas/reservas_services.py
+from datetime import datetime
 from typing import Any
-
 from db import execute
-
-TZ_ARG = timezone(timedelta(hours=-3))
+from helpers import parsear_fecha_iso
 
 FiltrosReserva = dict[str, int | str]
-
-
-def parsear_fecha_iso(dt_value: datetime | str | None) -> str | None:
-    """Formatea una fecha de MySQL como ISO con zona horaria GMT-3."""
-    if dt_value is None:
-        return None
-    if isinstance(dt_value, str):
-        dt_value = datetime.fromisoformat(dt_value)
-    if dt_value.tzinfo is None:
-        dt_value = dt_value.replace(tzinfo=TZ_ARG)
-    return dt_value.strftime("%Y-%m-%dT%H:%M:%S.%f-03:00")
 
 
 def _construir_condiciones(
@@ -126,6 +114,8 @@ def crear_reserva_db(datos: dict[str, Any]) -> tuple[dict | None, str | None]:
     id_cancha = datos.get("id_cancha")
     inicio_iso = datos.get("fecha_hora_inicio")
     fin_iso = datos.get("fecha_hora_fin")
+    if not isinstance(inicio_iso, str) or not isinstance(fin_iso, str):
+        return None, "INVALID_DATE"
 
     # 1. Validar existencia y estado del socio
     query_socio = "SELECT id_socio, estado FROM socios WHERE id_socio = %s;"

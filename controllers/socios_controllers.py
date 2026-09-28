@@ -1,128 +1,129 @@
 # controllers/socios_controllers.py
 from flask import jsonify, request
+from errors import ERRORS
+from helpers import es_email_valido, parsear_paginacion, parsear_booleano, build_hateoas_links
 from services.socios_services import (
-    actualizar_socio,
+    obtener_socios_db,
+    contar_socios_db,
+    obtener_socio_por_id_db,
+    obtener_socio_por_email_db,
     guardar_nuevo_socio,
-    obtener_socio_por_id,
-    obtener_todos_los_socios,
+    actualizar_socio_db
 )
 
-# GET /socios/ lista los socios.
+
 def listar_socios_controller():
-    """Devuelve en JSON la lista de socios activos."""
-    socios = obtener_todos_los_socios()
-    return jsonify({"socios": socios}), 200
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+        filtros: dict = {}
+        nombre = request.args.get("nombre")
+        if nombre:
+            filtros["nombre"] = nombre.strip()
 
-# GET /socios/{id} devuelve el detalle de un socio específico.
-def obtener_socio_controller(socio_id):
-    """Devuelve los detalles de un socio específico por ID."""
-    if socio_id <= 0:
-        return jsonify({"error": "El id debe ser positivo"}), 400
+        activo = parsear_booleano(request.args.get("activo"), "activo")
+        if activo is not None:
+            filtros["activo"] = activo
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
 
-    socio, error = obtener_socio_por_id(socio_id)
-    if error == "NOT_FOUND":
-        return jsonify({"error": "No existe el socio solicitado"}), 404
-    elif error:
-        return jsonify({"error": "No se pudo consultar el socio"}), 500
+    total = contar_socios_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
 
+    socios = obtener_socios_db(filtros, limit, offset)
+    if socios is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
+
+    if not socios and total == 0:
+        return "", 204
+
+    links = build_hateoas_links(
+        request.base_url, limit, offset, total, request.args.to_dict()
+    )
+    return jsonify({"socios": socios, "_links": links}), 200
+
+
+def obtener_socio_controller(socio_id: int):
+    socio = obtener_socio_por_id_db(socio_id)
+    if not socio:
+        return ERRORS["NOT_FOUND"](f"No se encontró el socio con id {socio_id}.")
     return jsonify(socio), 200
 
 
 def crear_socio_controller():
-    """Valida los datos básicos de entrada y solicita crear un socio."""
-    # silent=True evita una excepción si el cuerpo no contiene JSON válido.
-    data = request.get_json(silent=True)
-    if type(data) is not dict:
-        return jsonify({"error": "Los datos enviados no son validos"}), 400
-    elif set(data) - {"nombre", "email"}:
-        return jsonify({"error": "Solo se permiten nombre y email"}), 400
-    
-    nombre = data.get('nombre')
-    email = data.get('email')
+    data = request.get_json(silent=True) or {}
+    nombre = data.get("nombre")
+    email = data.get("email")
 
-    # Ambos campos son obligatorios para registrar un socio.
     if not nombre or not email:
-        return jsonify({"error": "nombre y email son requeridos"}), 400
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("nombre y email son obligatorios.")
 
-    if type(nombre) is not str or not nombre.strip():
-        return jsonify({"error": "nombre debe ser texto y no estar vacio"}), 400
-    nombre = nombre.strip() 
+    if not isinstance(nombre, str) or not nombre.strip():
+        return ERRORS["INVALID_FORMAT"]("El nombre debe ser un texto no vacío.")
 
-    if type(email) is not str:
-        return jsonify({"error": "email debe ser texto"}), 400
-    email = email.strip()
-    email = email.lower()
-    partes_email = email.split("@")
-    if (
-        len(partes_email) != 2
-        or not partes_email[0]
-        or "." not in partes_email[1]
-        or " " in email
-    ):
-        return jsonify({"error": "email no tiene un formato valido"}), 400
+    if not isinstance(email, str) or not es_email_valido(email):
+        return ERRORS["INVALID_FORMAT"]("El formato del correo electrónico no es válido.")
 
-    # La capa de servicio realiza la inserción en MySQL.
-    resultado = guardar_nuevo_socio(nombre, email)
-    socio_id = resultado[0]
-    error = resultado[1]
-    if error == "EMAIL_EXISTS":
-        return jsonify({"error": "Ya existe un socio con ese email"}), 409
-    elif error or socio_id is None:
-        return jsonify({"error": "No se pudo guardar el socio"}), 500
+    nombre_limpio = nombre.strip()
+    email_limpio = email.strip().lower()
 
-    return jsonify({"mensaje": "Socio creado correctamente"}), 201
+    if obtener_socio_por_email_db(email_limpio):
+        return ERRORS["CONFLICT"](f"Ya existe un socio registrado con el correo '{email_limpio}'.")
 
-# PATCH /socios/{id} actualiza parcialmente un socio.
-def actualizar_socio_controller(socio_id):
-    """Actualiza parcialmente un socio."""
-    if socio_id <= 0:
-        return jsonify({"error": "El id debe ser positivo"}), 400
-    
+    nuevo_id = guardar_nuevo_socio(nombre_limpio, email_limpio)
+    if not nuevo_id:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo registrar el socio en la base de datos.")
+
+    respuesta = {
+        "id": nuevo_id,
+        "nombre": nombre_limpio,
+        "email": email_limpio,
+        "activo": True
+    }
+    return jsonify(respuesta), 201
+
+
+def actualizar_socio_controller(socio_id: int):
     data = request.get_json(silent=True)
-    if type(data) is not dict:
-        return jsonify({"error": "Los datos enviados no son validos"}), 400
-    elif not data:
-        return jsonify({"error": "Se requiere al menos un campo para actualizar"}), 400
-    elif set(data) - {"nombre", "email", "activo"}:
-        return jsonify({"error": "Solo se permiten nombre, email y activo"}), 400
-    
-    cambios = {} # Diccionario para almacenar los cambios validados
-    for campo, valor in data.items():
-        if campo == "nombre": # Validación de nombre
-            if type(valor) is not str or not valor.strip():
-                return jsonify({"error": "nombre debe ser texto y no estar vacio"}), 400
-            cambios[campo] = valor.strip()
+    if not isinstance(data, dict) or not data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
 
-        elif campo == "email": # Validación de formato de email
-            if type(valor) is not str or not valor.strip():
-                return jsonify({"error": "email debe ser texto y no estar vacio"}), 400
-            email = valor.strip().lower()
-            partes_email = email.split("@")
-            if (
-                len(partes_email) != 2
-                or not partes_email[0]
-                or "." not in partes_email[1]
-                or " " in email
-            ):
-                return jsonify({"error": "email no tiene un formato valido"}), 400
-            cambios[campo] = email
-            
-        else:
-            if type(valor) is not bool:
-                return jsonify({"error": "activo debe ser true o false"}), 400
-            cambios[campo] = valor
+    socio_actual = obtener_socio_por_id_db(socio_id)
+    if not socio_actual:
+        return ERRORS["NOT_FOUND"](f"No se encontró el socio con id {socio_id}.")
 
-    socio, error = obtener_socio_por_id(socio_id) # Verifica que el socio exista antes de actualizar.
-    if error == "NOT_FOUND":
-        return jsonify({"error": "No existe el socio solicitado"}), 404
-    elif error:
-        return jsonify({"error": "No se pudo consultar el socio"}), 500
+    campos_a_actualizar = {}
 
-    error = actualizar_socio(socio_id, cambios)
-    if error == "EMAIL_EXISTS":
-        return jsonify({"error": "Ya existe un socio con ese email"}), 409
-    elif error:
-        return jsonify({"error": "No se pudo actualizar el socio"}), 500
+    if "nombre" in data:
+        nombre = data["nombre"]
+        if not isinstance(nombre, str) or not nombre.strip():
+            return ERRORS["INVALID_FORMAT"]("El campo 'nombre' debe ser un texto no vacío.")
+        campos_a_actualizar["nombre"] = nombre.strip()
 
-    socio.update(cambios) # Actualiza el diccionario con los cambios realizados
-    return jsonify(socio), 200
+    if "email" in data:
+        email = data["email"]
+        if not isinstance(email, str) or not es_email_valido(email):
+            return ERRORS["INVALID_FORMAT"]("El formato del correo electrónico no es válido.")
+
+        email_limpio = email.strip().lower()
+        if obtener_socio_por_email_db(email_limpio, excluir_id=socio_id):
+            return ERRORS["CONFLICT"](f"El correo '{email_limpio}' ya pertenece a otro socio registrado.")
+        campos_a_actualizar["email"] = email_limpio
+
+    if "activo" in data:
+        activo = data["activo"]
+        if not isinstance(activo, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'activo' debe ser un booleano (true o false).")
+        campos_a_actualizar["activo"] = activo
+
+    if not campos_a_actualizar:
+        return ERRORS["INVALID_FORMAT"]("No se enviaron campos válidos para actualizar ('nombre', 'email', 'activo').")
+
+    filas_modificadas = actualizar_socio_db(socio_id, campos_a_actualizar)
+    if filas_modificadas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al actualizar el socio en la base de datos.")
+
+    return "", 204

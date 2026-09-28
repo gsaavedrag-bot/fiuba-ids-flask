@@ -37,3 +37,27 @@ CREATE TABLE IF NOT EXISTS reservas (
     FOREIGN KEY (id_cancha) REFERENCES canchas(id_cancha),
     FOREIGN KEY (id_socio) REFERENCES socios(id_socio)
 );
+
+-- ============================================================
+-- PRECARGA OBLIGATORIA DE DEPORTES
+-- ============================================================
+INSERT INTO deportes (nombre, cantidad_jugadores) VALUES
+('Fútbol 5', 10),
+('Fútbol 7', 14),
+('Fútbol 11', 22),
+('Básquet', 10),
+('Pádel', 4),
+('Tenis', 2);
+
+-- ============================================================
+-- DATOS SEMILLA DE PRUEBA
+-- ============================================================
+INSERT INTO canchas (nombre, id_deporte, precio_hora, techada, activa, precio_reserva) VALUES
+('Cancha 1 - Sintético', 1, 1200000, FALSE, TRUE, 1200000),
+('Cancha Central Tenis', 6, 1500000, TRUE, TRUE, 1500000),
+('Pádel Cristal 1', 5, 1000000, TRUE, TRUE, 1000000);
+
+INSERT INTO socios (nombre, email, estado) VALUES
+('Carlos Tevez', 'carlos.tevez@club.com', TRUE),
+('Emanuel Ginobili', 'manu.ginobili@club.com', TRUE),
+('Luciana Aymar', 'luciana.aymar@club.com', TRUE);

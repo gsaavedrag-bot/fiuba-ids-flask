@@ -7,7 +7,11 @@ from services.canchas_services import (
     obtener_canchas_db,
     crear_cancha_db,
     obtener_canchas_disponibles_db,
-    contar_canchas_db
+    contar_canchas_db,
+    obtener_cancha_por_id_db,
+    actualizar_cancha_db,
+    contar_reservas_por_cancha_db,
+    eliminar_cancha_db
 )
 
 def listar_canchas_controller():

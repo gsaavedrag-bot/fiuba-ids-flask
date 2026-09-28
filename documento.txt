@@ -17,30 +17,26 @@ fiuba-ids-flask/
 ├── requirements.txt                # Dependencias Python
 ├── README.md                       # Documentación del proyecto
 ├── swagger.yaml                    # Especificación de API (OpenAPI 3.0)
-├── .env                            # Variables de entorno (configuración local)
 ├── .env.example                    # Ejemplo de variables de entorno
 ├── .gitignore                      # Archivos ignorados por Git
 ├── Enunciado - Estudiantes.pdf     # Enunciado del trabajo práctico
 │
 ├── controllers/                    # Capa de controladores (lógica de negocio HTTP)
-│   ├── __pycache__/
-│   ├── canchas_controllers.py      # Controlador de canchas
-│   ├── reservas_controllers.py     # Controlador de reservas
-│   ├── socios_controllers.py       # Controlador de socios (incluye PATCH/actualizar)
+│   ├── canchas_controllers.py      # Controlador de canchas (incluye GET/PATCH/DELETE/{id})
+│   ├── reservas_controllers.py     # Controlador de reservas (incluye cambio de estado)
+│   ├── socios_controllers.py       # Controlador de socios (incluye GET/{id}, paginación, filtros)
 │   └── deportes_controllers.py     # Controlador de deportes
 │
 ├── routes/                         # Definición de rutas (Blueprints de Flask)
-│   ├── __pycache__/
-│   ├── canchas_routes.py           # Rutas de canchas
+│   ├── canchas_routes.py           # Rutas de canchas (incluye GET/PATCH/DELETE /{id})
 │   ├── reservas_routes.py          # Rutas de reservas
-│   ├── socios_routes.py            # Rutas de socios (incluye PATCH /socios/{id})
+│   ├── socios_routes.py            # Rutas de socios (incluye GET /socios/{id})
 │   └── deportes_routes.py          # Rutas de deportes
 │
 └── services/                       # Capa de servicios (acceso a datos / lógica SQL)
-    ├── __pycache__/
-    ├── canchas_services.py         # Servicio de canchas
-    ├── reservas_services.py        # Servicio de reservas
-    ├── socios_services.py          # Servicio de socios (incluye obtener_por_id, por_email, actualizar)
+    ├── canchas_services.py         # Servicio de canchas (incluye por_id, actualizar, eliminar)
+    ├── reservas_services.py       # Servicio de reservas (con validaciones de solapamiento)
+    ├── socios_services.py         # Servicio de socios (filtros, paginación, por_id, por_email, actualizar)
     └── deportes_services.py        # Servicio de deportes
 
 --------------------------------------------------------------------------------
@@ -68,6 +64,7 @@ if __name__ == '__main__':
         app.run(debug=True, port=port)
     else:
         app.run(debug=False, host='0.0.0.0', port=port)
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: db.py
@@ -128,6 +125,7 @@ def execute(query: str, params: tuple = None):
         if conn and conn.is_connected():
             conn.close()
 
+
 --------------------------------------------------------------------------------
 ARCHIVO: init_db.sql
 --------------------------------------------------------------------------------
@@ -172,56 +170,84 @@ CREATE TABLE IF NOT EXISTS reservas (
     FOREIGN KEY (id_socio) REFERENCES socios(id_socio)
 );
 
+-- ============================================================
+-- PRECARGA OBLIGATORIA DE DEPORTES
+-- ============================================================
+INSERT INTO deportes (nombre, cantidad_jugadores) VALUES
+('Fútbol 5', 10),
+('Fútbol 7', 14),
+('Fútbol 11', 22),
+('Básquet', 10),
+('Pádel', 4),
+('Tenis', 2);
+
+-- ============================================================
+-- DATOS SEMILLA DE PRUEBA
+-- ============================================================
+INSERT INTO canchas (nombre, id_deporte, precio_hora, techada, activa, precio_reserva) VALUES
+('Cancha 1 - Sintético', 1, 1200000, FALSE, TRUE, 1200000),
+('Cancha Central Tenis', 6, 1500000, TRUE, TRUE, 1500000),
+('Pádel Cristal 1', 5, 1000000, TRUE, TRUE, 1000000);
+
+INSERT INTO socios (nombre, email, estado) VALUES
+('Carlos Tevez', 'carlos.tevez@club.com', TRUE),
+('Emanuel Ginobili', 'manu.ginobili@club.com', TRUE),
+('Luciana Aymar', 'luciana.aymar@club.com', TRUE);
+
+
 --------------------------------------------------------------------------------
 ARCHIVO: errors.py
 --------------------------------------------------------------------------------
 
+# errors.py
 from flask import jsonify
 
 
-def build_error_response(code: int, message: str, description: str):
+def build_error_response(code: int | str, message: str, description: str):
     """
     Construye la tupla (Response, HTTP_STATUS) respetando
-    el schema 'Errores' exigido en swagger.yaml.
+    el schema 'Errores' exigido en swagger.yaml (code es string).
     """
+    status_http = int(code) if isinstance(code, int) or str(code).isdigit() else 500
     response = {
         "errors": [
             {
-                "code": code,
+                "code": str(code),
                 "message": message,
                 "level": "error",
                 "description": description
             }
         ]
     }
-    return jsonify(response), code
+    return jsonify(response), status_http
 
 
 # Mapeo uniforme para invocar directamente desde los controllers
 ERRORS = {
     # 400 Bad Request
     "MISSING_REQUIRED_FIELDS": lambda msg="Faltan campos obligatorios": build_error_response(
-        400, msg, "La solicitud no contiene todos los campos obligatorios."
+        "400", msg, "La solicitud no contiene todos los campos obligatorios."
     ),
     "INVALID_FORMAT": lambda msg="Formato de datos inválido": build_error_response(
-        400, msg, "Los tipos o formatos de los datos proporcionados son incorrectos."
+        "400", msg, "Los tipos o formatos de los datos proporcionados son incorrectos."
     ),
 
     # 404 Not Found
     "NOT_FOUND": lambda msg="Recurso no encontrado": build_error_response(
-        404, msg, "El recurso solicitado no existe en la base de datos."
+        "404", msg, "El recurso solicitado no existe en la base de datos."
     ),
 
-    # 409 Conflict (Emails repetidos, transiciones de estado inválidas, solapamientos)
+    # 409 Conflict
     "CONFLICT": lambda msg="Conflicto de negocio": build_error_response(
-        409, msg, "La operación no pudo completarse debido a un conflicto de estado o registros existentes."
+        "409", msg, "La operación no pudo completarse debido a un conflicto de estado o registros existentes."
     ),
 
     # 500 Internal Server Error
     "INTERNAL_SERVER_ERROR": lambda msg="Error interno en el servidor": build_error_response(
-        500, msg, "Ocurrió un error inesperado al procesar la solicitud."
+        "500", msg, "Ocurrió un error inesperado al procesar la solicitud."
     )
 }
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: helpers.py
@@ -409,7 +435,11 @@ from services.canchas_services import (
     obtener_canchas_db,
     crear_cancha_db,
     obtener_canchas_disponibles_db,
-    contar_canchas_db
+    contar_canchas_db,
+    obtener_cancha_por_id_db,
+    actualizar_cancha_db,
+    contar_reservas_por_cancha_db,
+    eliminar_cancha_db
 )
 
 def listar_canchas_controller():
@@ -539,6 +569,73 @@ def consultar_disponibles_controller():
     if canchas is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la disponibilidad en la base de datos.")
     return jsonify({"canchas": canchas}), 200
+
+def obtener_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+    return jsonify(cancha), 200
+
+
+def actualizar_cancha_controller(cancha_id: int):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
+
+    cancha_actual = obtener_cancha_por_id_db(cancha_id)
+    if not cancha_actual:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    campos_a_actualizar = {}
+
+    if "nombre" in data:
+        nombre = data["nombre"]
+        if not isinstance(nombre, str) or not nombre.strip():
+            return ERRORS["INVALID_FORMAT"]("El campo 'nombre' debe ser un texto no vacío.")
+        campos_a_actualizar["nombre"] = nombre.strip()
+
+    if "precio_hora" in data:
+        precio = data["precio_hora"]
+        if isinstance(precio, bool) or not isinstance(precio, int) or precio <= 0:
+            return ERRORS["INVALID_FORMAT"]("El campo 'precio_hora' debe ser un entero mayor a cero.")
+        campos_a_actualizar["precio_hora"] = precio
+
+    if "techada" in data:
+        techada = data["techada"]
+        if not isinstance(techada, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'techada' debe ser booleano.")
+        campos_a_actualizar["techada"] = techada
+
+    if "activa" in data:
+        activa = data["activa"]
+        if not isinstance(activa, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'activa' debe ser booleano.")
+        campos_a_actualizar["activa"] = activa
+
+    if not campos_a_actualizar:
+        return ERRORS["INVALID_FORMAT"]("No se enviaron campos válidos para actualizar.")
+
+    filas = actualizar_cancha_db(cancha_id, campos_a_actualizar)
+    if filas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al actualizar la cancha en la base de datos.")
+
+    return "", 204
+
+
+def eliminar_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    total_reservas = contar_reservas_por_cancha_db(cancha_id)
+    if total_reservas is not None and total_reservas > 0:
+        return ERRORS["CONFLICT"]("No se puede eliminar la cancha porque posee reservas asociadas. Utilice PATCH para desactivarla.")
+
+    filas = eliminar_cancha_db(cancha_id)
+    if filas is None or filas == 0:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo eliminar la cancha de la base de datos.")
+
+    return "", 204
 
 
 --------------------------------------------------------------------------------
@@ -723,9 +820,10 @@ ARCHIVO: controllers/socios_controllers.py
 # controllers/socios_controllers.py
 from flask import jsonify, request
 from errors import ERRORS
-from helpers import es_email_valido
+from helpers import es_email_valido, parsear_paginacion, parsear_booleano, build_hateoas_links
 from services.socios_services import (
-    obtener_todos_los_socios,
+    obtener_socios_db,
+    contar_socios_db,
     obtener_socio_por_id_db,
     obtener_socio_por_email_db,
     guardar_nuevo_socio,
@@ -734,11 +832,44 @@ from services.socios_services import (
 
 
 def listar_socios_controller():
-    """Devuelve en JSON la lista de socios activos."""
-    socios = obtener_todos_los_socios()
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+        filtros: dict = {}
+        nombre = request.args.get("nombre")
+        if nombre:
+            filtros["nombre"] = nombre.strip()
+
+        activo = parsear_booleano(request.args.get("activo"), "activo")
+        if activo is not None:
+            filtros["activo"] = activo
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
+
+    total = contar_socios_db(filtros)
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
+
+    socios = obtener_socios_db(filtros, limit, offset)
     if socios is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
-    return jsonify({"socios": socios}), 200
+
+    if not socios and total == 0:
+        return "", 204
+
+    links = build_hateoas_links(
+        request.base_url, limit, offset, total, request.args.to_dict()
+    )
+    return jsonify({"socios": socios, "_links": links}), 200
+
+
+def obtener_socio_controller(socio_id: int):
+    socio = obtener_socio_por_id_db(socio_id)
+    if not socio:
+        return ERRORS["NOT_FOUND"](f"No se encontró el socio con id {socio_id}.")
+    return jsonify(socio), 200
 
 
 def crear_socio_controller():
@@ -775,7 +906,6 @@ def crear_socio_controller():
 
 
 def actualizar_socio_controller(socio_id: int):
-    """Actualiza parcialmente un socio (nombre, email, activo)."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not data:
         return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
@@ -844,30 +974,43 @@ ARCHIVO: routes/canchas_routes.py
 
 # routes/canchas_routes.py
 from flask import Blueprint
-# Importamos los controladores que atienden cada ruta
 from controllers.canchas_controllers import (
     listar_canchas_controller,
     crear_cancha_controller,
-    consultar_disponibles_controller
+    consultar_disponibles_controller,
+    obtener_cancha_controller,
+    actualizar_cancha_controller,
+    eliminar_cancha_controller
 )
 
-# Blueprint para agrupar los endpoints de canchas.
 canchas_bp = Blueprint('canchas_bp', __name__)
 
-# GET lista las canchas y POST recibe los datos de una nueva cancha.
+@canchas_bp.route('', methods=['GET'])
 @canchas_bp.route('/', methods=['GET'])
 def listar():
     return listar_canchas_controller()
 
-
+@canchas_bp.route('', methods=['POST'])
 @canchas_bp.route('/', methods=['POST'])
 def crear():
     return crear_cancha_controller()
 
-# Endpoint para consultar canchas libres en un intervalo
 @canchas_bp.route('/disponibles', methods=['GET'])
+@canchas_bp.route('/disponibles/', methods=['GET'])
 def consultar_disponibles():
     return consultar_disponibles_controller()
+
+@canchas_bp.route('/<int:cancha_id>', methods=['GET'])
+def obtener_cancha(cancha_id):
+    return obtener_cancha_controller(cancha_id)
+
+@canchas_bp.route('/<int:cancha_id>', methods=['PATCH'])
+def actualizar_cancha(cancha_id):
+    return actualizar_cancha_controller(cancha_id)
+
+@canchas_bp.route('/<int:cancha_id>', methods=['DELETE'])
+def eliminar_cancha(cancha_id):
+    return eliminar_cancha_controller(cancha_id)
 
 
 --------------------------------------------------------------------------------
@@ -925,25 +1068,26 @@ from flask import Blueprint
 from controllers.socios_controllers import (
     listar_socios_controller,
     crear_socio_controller,
+    obtener_socio_controller,
     actualizar_socio_controller
 )
 
-# Blueprint para agrupar los endpoints de socios
 socios_bp = Blueprint('socios_bp', __name__)
 
-# GET /socios/ lista los socios
 @socios_bp.route('', methods=['GET'])
 @socios_bp.route('/', methods=['GET'])
 def listar_socios():
     return listar_socios_controller()
 
-# POST /socios/ registra un nuevo socio
+@socios_bp.route('/<int:socio_id>', methods=['GET'])
+def obtener_socio(socio_id):
+    return obtener_socio_controller(socio_id)
+
 @socios_bp.route('', methods=['POST'])
 @socios_bp.route('/', methods=['POST'])
 def crear_socio():
     return crear_socio_controller()
 
-# PATCH /socios/{id} actualiza parcialmente los datos o el estado
 @socios_bp.route('/<int:socio_id>', methods=['PATCH'])
 def actualizar_socio(socio_id):
     return actualizar_socio_controller(socio_id)
@@ -955,13 +1099,13 @@ def actualizar_socio(socio_id):
 ARCHIVO: routes/deportes_routes.py
 --------------------------------------------------------------------------------
 
+# routes/deportes_routes.py
 from flask import Blueprint
 from controllers.deportes_controllers import listar_deportes_controller
 
-# Blueprint que agrupa los endpoints relacionados con deportes.
 deportes_bp = Blueprint('deportes_bp', __name__)
 
-# La ruta completa incluye el prefijo /deportes registrado en app.py.
+@deportes_bp.route('', methods=['GET'])
 @deportes_bp.route('/', methods=['GET'])
 def listar_deportes():
     return listar_deportes_controller()
@@ -975,6 +1119,7 @@ ARCHIVO: services/canchas_services.py
 
 # services/canchas_services.py
 from typing import Any
+
 from db import execute
 
 
@@ -1068,6 +1213,7 @@ def contar_canchas_disponibles_db(inicio: str, fin: str, id_deporte: int | None 
     if techada is not None:
         query += " AND c.techada = %s"
         params.append(techada)
+
     res = execute(query, tuple(params))
     return res[0]["total"] if res else 0
 
@@ -1104,6 +1250,61 @@ def obtener_canchas_disponibles_db(
     params.extend([limit, offset])
 
     return execute(query, tuple(params))
+
+def obtener_cancha_por_id_db(cancha_id: int) -> dict[str, Any] | None:
+    query = """
+        SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
+        FROM canchas
+        WHERE id_cancha = %s;
+    """
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return None
+    return resultado[0]
+
+
+def actualizar_cancha_db(cancha_id: int, campos: dict[str, Any]) -> int | None:
+    set_clauses = []
+    params = []
+
+    if "nombre" in campos:
+        set_clauses.append("nombre = %s")
+        params.append(campos["nombre"])
+
+    if "precio_hora" in campos:
+        set_clauses.append("precio_hora = %s")
+        params.append(campos["precio_hora"])
+        set_clauses.append("precio_reserva = %s")
+        params.append(campos["precio_hora"])
+
+    if "techada" in campos:
+        set_clauses.append("techada = %s")
+        params.append(campos["techada"])
+
+    if "activa" in campos:
+        set_clauses.append("activa = %s")
+        params.append(campos["activa"])
+
+    if not set_clauses:
+        return 0
+
+    query = f"UPDATE canchas SET {', '.join(set_clauses)} WHERE id_cancha = %s;"
+    params.append(cancha_id)
+
+    return execute(query, tuple(params))
+
+
+def contar_reservas_por_cancha_db(cancha_id: int) -> int | None:
+    query = "SELECT COUNT(*) AS total FROM reservas WHERE id_cancha = %s;"
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return 0
+    return int(resultado[0]["total"])
+
+
+def eliminar_cancha_db(cancha_id: int) -> int | None:
+    query = "DELETE FROM canchas WHERE id_cancha = %s;"
+    return execute(query, (cancha_id,))
 
 
 --------------------------------------------------------------------------------
@@ -1309,24 +1510,55 @@ ARCHIVO: services/socios_services.py
 from typing import Any
 from db import execute
 
-def obtener_todos_los_socios():
-    """Obtiene socios activos y adapta los nombres de columnas para la API."""
-    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE estado = %s;"
-    return execute(query, (True,))
+
+def _construir_filtros_socios(filtros: dict):
+    condiciones = []
+    params: list[Any] = []
+
+    if "nombre" in filtros:
+        condiciones.append("nombre LIKE %s")
+        params.append(f"%{filtros['nombre']}%")
+
+    if "activo" in filtros:
+        condiciones.append("estado = %s")
+        params.append(filtros["activo"])
+
+    where = f" WHERE {' AND '.join(condiciones)}" if condiciones else ""
+    return where, tuple(params)
+
+
+def contar_socios_db(filtros: dict | None = None) -> int | None:
+    where, params = _construir_filtros_socios(filtros or {})
+    resultado = execute(f"SELECT COUNT(*) AS total FROM socios{where};", params)
+    return resultado[0]["total"] if resultado else None
+
+
+def obtener_socios_db(
+    filtros: dict | None = None,
+    limit: int = 10,
+    offset: int = 0
+) -> list[dict] | None:
+    where, params = _construir_filtros_socios(filtros or {})
+    query = f"""
+        SELECT id_socio AS id, nombre, email, estado AS activo
+        FROM socios{where}
+        ORDER BY id_socio ASC
+        LIMIT %s OFFSET %s;
+    """
+    parametros = list(params)
+    parametros.extend([limit, offset])
+    return execute(query, tuple(parametros))
+
 
 def obtener_socio_por_id_db(socio_id: int) -> dict[str, Any] | None:
-    """Busca un socio por su clave primaria id_socio."""
     query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE id_socio = %s;"
     filas = execute(query, (socio_id,))
     if not isinstance(filas, list) or not filas:
         return None
     return filas[0]
 
+
 def obtener_socio_por_email_db(email: str, excluir_id: int | None = None) -> dict[str, Any] | None:
-    """
-    Verifica si un email ya está registrado (incluso inactivo).
-    Si se pasa excluir_id, omite al propio socio durante el PATCH.
-    """
     query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE email = %s"
     params: list[str | int] = [email]
     if excluir_id is not None:
@@ -1338,14 +1570,14 @@ def obtener_socio_por_email_db(email: str, excluir_id: int | None = None) -> dic
         return None
     return filas[0]
 
+
 def guardar_nuevo_socio(nombre: str, email: str) -> int | None:
-    """Inserta un socio nuevo con estado habilitado (TRUE)."""
     query = "INSERT INTO socios (nombre, email, estado) VALUES (%s, %s, TRUE);"
     resultado = execute(query, (nombre, email))
     return resultado if isinstance(resultado, int) else None
 
+
 def actualizar_socio_db(socio_id: int, campos: dict[str, Any]) -> int | None:
-    """Construye dinámicamente el UPDATE según los campos recibidos."""
     set_clauses = []
     params = []
 
@@ -1358,7 +1590,6 @@ def actualizar_socio_db(socio_id: int, campos: dict[str, Any]) -> int | None:
         params.append(campos["email"])
 
     if "activo" in campos:
-        # En la tabla de la DB la columna se llama estado
         set_clauses.append("estado = %s")
         params.append(campos["activo"])
 
@@ -1382,7 +1613,7 @@ from db import execute
 def listar_deportes_db():
     """Consulta los deportes y adapta el nombre de la clave para la API."""
     query = """
-        SELECT 
+        SELECT
             -- El esquema usa id_deporte; la respuesta pública usa id.
             id_deporte AS id,
             nombre
@@ -1397,18 +1628,6 @@ def listar_deportes_db():
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
-ARCHIVO: .env
---------------------------------------------------------------------------------
-
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=gabriel
-MYSQL_PASSWORD=Permanganato64
-MYSQL_DATABASE=club_deportivo
-FLASK_PORT=5001
-ENV=dev
-
---------------------------------------------------------------------------------
 ARCHIVO: .env.example
 --------------------------------------------------------------------------------
 
@@ -1417,8 +1636,10 @@ MYSQL_PORT=
 MYSQL_USER=
 MYSQL_PASSWORD=
 MYSQL_DATABASE=
+
 FLASK_PORT=
 ENV=
+
 
 --------------------------------------------------------------------------------
 ARCHIVO: .gitignore
@@ -1450,6 +1671,7 @@ __pycache__/
 *.log
 *.sqlite3
 
+
 --------------------------------------------------------------------------------
 ARCHIVO: requirements.txt
 --------------------------------------------------------------------------------
@@ -1457,6 +1679,54 @@ ARCHIVO: requirements.txt
 flask
 mysql-connector-python
 python-dotenv
+
+
+--------------------------------------------------------------------------------
+ARCHIVO: swagger.yaml (Resumen - Estructura completa con extensiones)
+--------------------------------------------------------------------------------
+
+EL archivo swagger.yaml define la especificación OpenAPI 3.0 de la API.
+Incluye los siguientes endpoints y esquemas:
+
+ENDPOINTS:
+  - GET    /deportes                           -> Listar deportes precargados
+  - GET    /canchas                            -> Listar canchas (con filtros)
+  - POST   /canchas                            -> Crear cancha
+  - GET    /canchas/{id}                       -> Obtener cancha por ID
+  - PATCH  /canchas/{id}                       -> Actualizar parcialmente cancha
+  - DELETE /canchas/{id}                       -> Eliminar cancha (sin reservas)
+  - GET    /canchas/disponibles                -> Consultar canchas disponibles
+  - GET    /socios                             -> Listar socios (con filtros)
+  - POST   /socios                             -> Crear socio
+  - GET    /socios/{id}                        -> Obtener socio por ID
+  - PATCH  /socios/{id}                        -> Actualizar parcialmente socio
+  - GET    /reservas                           -> Listar reservas (con filtros)
+  - POST   /reservas                           -> Crear reserva
+  - GET    /reservas/{id}                      -> Obtener reserva por ID
+  - PUT    /reservas/{id}/estado               -> Cambiar estado de reserva
+
+  EXTENSIONES OPCIONALES (definidas en Swagger; no implementadas en las rutas actuales):
+  - GET    /bloqueos                           -> Listar bloqueos de mantenimiento
+  - POST   /bloqueos                           -> Crear bloqueo de mantenimiento
+  - DELETE /bloqueos/{id}                      -> Eliminar bloqueo
+  - POST   /reservas/recurrentes               -> Crear reservas recurrentes
+
+COMPONENTES PRINCIPALES:
+  Schemas: Deporte, Cancha, CanchaCreate, CanchaUpdate, Socio, SocioCreate,
+           SocioUpdate, Reserva, ReservaCreate, EstadoReserva, Bloqueo,
+           BloqueoCreate, ReservaRecurrenteCreate, Links, Link, Error, Errores,
+           ErroresConConflictos, DeportesListResponse, CanchasListResponse,
+           SociosListResponse, ReservasListResponse, BloqueosListResponse
+
+  Parámetros: Id, Limit, Offset, NombreFilter, IdDeporteFilter, TechadaFilter,
+              ActivaFilter, ActivoFilter, EstadoFilter, IdCanchaFilter,
+              IdSocioFilter, FechaDesdeFilter, FechaHastaFilter, FechaRequired,
+              HoraInicioRequired, HoraFinRequired, FechaBloqueoFilter
+
+  Respuestas: GetDeportesList200, GetCanchasList200, GetCancha200,
+              GetSociosList200, GetSocio200, GetReservasList200, GetReserva200,
+              GetBloqueosList200, Created, NoContent, BadRequest, NotFound,
+              Conflict, InternalServerError, ReservasRecurrentesConflict
 
 --------------------------------------------------------------------------------
 ARCHIVO: README.md
@@ -1616,1133 +1886,7 @@ curl -X POST http://localhost:5000/socios \
 curl -X GET "http://localhost:5000/reservas?estado=confirmada&_limit=5&_offset=0"
 ```
 
---------------------------------------------------------------------------------
-ARCHIVO: swagger.yaml
---------------------------------------------------------------------------------
 
-openapi: 3.0.0
-info:
-  title: API de Reservas de Club Deportivo
-  description: |
-    API REST para gestionar canchas, socios y reservas del Club Deportivo Encuentro.
-
-    El contrato sigue el enunciado del trabajo práctico. La URL base puede variar
-    según el despliegue (por ejemplo, `/api` o `/v1`).
-  version: 1.0.0
-servers:
-  - url: /
-    description: Servidor local de desarrollo
-
-tags:
-  - name: Deportes
-    description: Deportes precargados
-  - name: Canchas
-    description: Gestión y disponibilidad de canchas
-  - name: Socios
-    description: Gestión de socios del club
-  - name: Reservas
-    description: Reservas de canchas
-  - name: Extensiones opcionales
-    description: Endpoints de la extensión opcional del enunciado
-
-paths:
-  /deportes:
-    get:
-      summary: Listar deportes precargados
-      tags:
-        - Deportes
-      responses:
-        '200':
-          $ref: '#/components/responses/GetDeportesList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /canchas:
-    get:
-      summary: Listar canchas
-      description: |
-        Devuelve el listado paginado de canchas. Se pueden aplicar filtros por
-        deporte, nombre (búsqueda parcial e insensible a mayúsculas), techada y
-        activa. Sin filtros se devuelven canchas activas e inactivas.
-      tags:
-        - Canchas
-      parameters:
-        - $ref: '#/components/parameters/IdDeporteFilter'
-        - $ref: '#/components/parameters/NombreFilter'
-        - $ref: '#/components/parameters/TechadaFilter'
-        - $ref: '#/components/parameters/ActivaFilter'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          $ref: '#/components/responses/GetCanchasList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    post:
-      summary: Crear una cancha
-      tags:
-        - Canchas
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CanchaCreate'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /canchas/{id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    get:
-      summary: Obtener una cancha por ID
-      tags:
-        - Canchas
-      responses:
-        '200':
-          $ref: '#/components/responses/GetCancha200'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    patch:
-      summary: Actualizar parcialmente una cancha
-      tags:
-        - Canchas
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CanchaUpdate'
-      responses:
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    delete:
-      summary: Eliminar una cancha
-      description: |
-        Elimina una cancha solo si no tiene reservas asociadas. Si tiene
-        reservas, responde 409 y podrá desactivarse mediante PATCH.
-      tags:
-        - Canchas
-      responses:
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /canchas/disponibles:
-    get:
-      summary: Consultar canchas disponibles en un intervalo
-      description: |
-        Devuelve las canchas activas que están libres durante todo el intervalo
-        solicitado. No crea ni retiene la reserva.
-      tags:
-        - Canchas
-      parameters:
-        - $ref: '#/components/parameters/FechaRequired'
-        - $ref: '#/components/parameters/HoraInicioRequired'
-        - $ref: '#/components/parameters/HoraFinRequired'
-        - $ref: '#/components/parameters/IdDeporteFilter'
-        - $ref: '#/components/parameters/TechadaFilter'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          $ref: '#/components/responses/GetCanchasList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /socios:
-    get:
-      summary: Listar socios
-      description: |
-        Devuelve el listado paginado de socios con filtros opcionales por nombre
-        (búsqueda parcial e insensible a mayúsculas) y activo.
-      tags:
-        - Socios
-      parameters:
-        - $ref: '#/components/parameters/NombreFilter'
-        - $ref: '#/components/parameters/ActivoFilter'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          $ref: '#/components/responses/GetSociosList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    post:
-      summary: Crear un socio
-      tags:
-        - Socios
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SocioCreate'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /socios/{id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    get:
-      summary: Obtener un socio por ID
-      tags:
-        - Socios
-      responses:
-        '200':
-          $ref: '#/components/responses/GetSocio200'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    patch:
-      summary: Actualizar parcialmente un socio
-      tags:
-        - Socios
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SocioUpdate'
-      responses:
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /reservas:
-    get:
-      summary: Listar reservas
-      description: |
-        Devuelve el listado paginado de reservas. Permite filtrar por cancha,
-        socio, estado y rango de fechas (ambos extremos inclusive).
-      tags:
-        - Reservas
-      parameters:
-        - $ref: '#/components/parameters/IdCanchaFilter'
-        - $ref: '#/components/parameters/IdSocioFilter'
-        - $ref: '#/components/parameters/EstadoFilter'
-        - $ref: '#/components/parameters/FechaDesdeFilter'
-        - $ref: '#/components/parameters/FechaHastaFilter'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          $ref: '#/components/responses/GetReservasList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    post:
-      summary: Crear una reserva
-      description: |
-        Crea una reserva en estado `confirmada`, validando que el socio y la
-        cancha existan, estén activos y no tengan superposiciones. El servidor
-        conserva la tarifa vigente y calcula el total.
-      tags:
-        - Reservas
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReservaCreate'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /reservas/{id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    get:
-      summary: Obtener una reserva por ID
-      tags:
-        - Reservas
-      responses:
-        '200':
-          $ref: '#/components/responses/GetReserva200'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /reservas/{id}/estado:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    put:
-      summary: Establecer el estado de una reserva
-      description: |
-        Cambia el estado de una reserva respetando las transiciones permitidas
-        y las restricciones temporales. Repetir el estado actual devuelve éxito
-        sin modificar la reserva.
-      tags:
-        - Reservas
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/EstadoReserva'
-      responses:
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /bloqueos:
-    get:
-      summary: Listar bloqueos de mantenimiento
-      description: Extensión opcional. Listado paginado de bloqueos.
-      tags:
-        - Extensiones opcionales
-      parameters:
-        - $ref: '#/components/parameters/IdCanchaFilter'
-        - $ref: '#/components/parameters/FechaBloqueoFilter'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Offset'
-      responses:
-        '200':
-          $ref: '#/components/responses/GetBloqueosList200'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-    post:
-      summary: Crear un bloqueo de mantenimiento
-      description: |
-        Extensión opcional. Crea un bloqueo que impide reservar una cancha en
-        el intervalo indicado.
-      tags:
-        - Extensiones opcionales
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BloqueoCreate'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /bloqueos/{id}:
-    parameters:
-      - $ref: '#/components/parameters/Id'
-    delete:
-      summary: Eliminar un bloqueo de mantenimiento
-      description: Extensión opcional. Quita la restricción del bloqueo.
-      tags:
-        - Extensiones opcionales
-      responses:
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-  /reservas/recurrentes:
-    post:
-      summary: Crear reservas recurrentes
-      description: |
-        Extensión opcional. Crea una serie de reservas semanales. Si alguna de
-        las fechas no está disponible, no se guarda ninguna y se devuelve 409
-        con el listado de fechas en conflicto.
-      tags:
-        - Extensiones opcionales
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ReservaRecurrenteCreate'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/ReservasRecurrentesConflict'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-
-components:
-  schemas:
-    Deporte:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Identificador único del deporte
-          example: 1
-        nombre:
-          type: string
-          description: Nombre del deporte
-          example: "Fútbol"
-
-    Cancha:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Identificador único de la cancha
-          example: 1
-        nombre:
-          type: string
-          description: Nombre o denominación de la cancha
-          example: "Cancha 1 - Fútbol 5"
-        id_deporte:
-          type: integer
-          description: Identificador del deporte asociado
-          example: 1
-        precio_hora:
-          type: integer
-          description: Tarifa vigente por hora en centavos
-          example: 1000000
-        techada:
-          type: boolean
-          description: Indica si la cancha es cubierta
-          example: false
-        activa:
-          type: boolean
-          description: Indica si admite nuevas reservas
-          example: true
-
-    CanchaCreate:
-      type: object
-      required:
-        - nombre
-        - id_deporte
-        - precio_hora
-      properties:
-        nombre:
-          type: string
-          description: Nombre de la cancha
-          example: "Cancha 1 - Fútbol 5"
-        id_deporte:
-          type: integer
-          description: Identificador del deporte asociado
-          example: 1
-        precio_hora:
-          type: integer
-          description: Tarifa por hora en centavos. Debe ser mayor a cero.
-          minimum: 1
-          example: 1000000
-        techada:
-          type: boolean
-          description: Indica si la cancha es cubierta
-          default: false
-          example: false
-        activa:
-          type: boolean
-          description: Indica si la cancha admite nuevas reservas
-          default: true
-          example: true
-
-    CanchaUpdate:
-      type: object
-      properties:
-        nombre:
-          type: string
-          description: Nombre de la cancha
-          example: "Cancha 1 - Fútbol 5"
-        precio_hora:
-          type: integer
-          description: Tarifa por hora en centavos. Debe ser mayor a cero.
-          minimum: 1
-          example: 1200000
-        techada:
-          type: boolean
-          description: Indica si la cancha es cubierta
-          example: true
-        activa:
-          type: boolean
-          description: Indica si la cancha admite nuevas reservas
-          example: true
-
-    Socio:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Identificador único del socio
-          example: 1
-        nombre:
-          type: string
-          description: Nombre completo del socio
-          example: "Juan Pérez"
-        email:
-          type: string
-          format: email
-          description: Correo electrónico único del socio
-          example: "juan.perez@example.com"
-        activo:
-          type: boolean
-          description: Indica si el socio puede realizar nuevas reservas
-          example: true
-
-    SocioCreate:
-      type: object
-      required:
-        - nombre
-        - email
-      properties:
-        nombre:
-          type: string
-          description: Nombre completo del socio
-          example: "Juan Pérez"
-        email:
-          type: string
-          format: email
-          description: Correo electrónico del socio
-          example: "juan.perez@example.com"
-
-    SocioUpdate:
-      type: object
-      properties:
-        nombre:
-          type: string
-          description: Nombre completo del socio
-          example: "Juan Pérez"
-        email:
-          type: string
-          format: email
-          description: Correo electrónico del socio
-          example: "juan.perez@example.com"
-        activo:
-          type: boolean
-          description: Indica si el socio puede realizar nuevas reservas
-          example: true
-
-    Reserva:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Identificador único de la reserva
-          example: 1
-        id_socio:
-          type: integer
-          description: Identificador del socio responsable
-          example: 1
-        id_cancha:
-          type: integer
-          description: Identificador de la cancha reservada
-          example: 2
-        fecha_hora_inicio:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Inicio del intervalo reservado en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T18:00:00.000000-03:00"
-        fecha_hora_fin:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Fin del intervalo reservado en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T20:00:00.000000-03:00"
-        estado:
-          type: string
-          description: Estado de la reserva
-          enum:
-            - confirmada
-            - cancelada
-            - finalizada
-          example: "confirmada"
-        precio_hora:
-          type: integer
-          description: Tarifa histórica aplicada en centavos
-          example: 1000000
-        precio_total:
-          type: integer
-          description: Importe total calculado en centavos
-          example: 2000000
-
-    ReservaCreate:
-      type: object
-      required:
-        - id_socio
-        - id_cancha
-        - fecha_hora_inicio
-        - fecha_hora_fin
-      properties:
-        id_socio:
-          type: integer
-          description: Identificador del socio responsable
-          example: 1
-        id_cancha:
-          type: integer
-          description: Identificador de la cancha reservada
-          example: 2
-        fecha_hora_inicio:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Inicio del intervalo reservado en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T18:00:00.000000-03:00"
-        fecha_hora_fin:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Fin del intervalo reservado en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T20:00:00.000000-03:00"
-
-    EstadoReserva:
-      type: object
-      required:
-        - estado
-      properties:
-        estado:
-          type: string
-          description: Nuevo estado de la reserva
-          enum:
-            - confirmada
-            - cancelada
-            - finalizada
-          example: "cancelada"
-
-    Bloqueo:
-      type: object
-      properties:
-        id:
-          type: integer
-          description: Identificador único del bloqueo
-          example: 1
-        id_cancha:
-          type: integer
-          description: Identificador de la cancha bloqueada
-          example: 2
-        fecha:
-          type: string
-          format: date
-          description: Día del bloqueo
-          example: "2026-10-20"
-        hora_inicio:
-          type: string
-          description: Hora de inicio del bloqueo
-          pattern: '^([01]\d|2[0-3]):00:00$'
-          example: "08:00:00"
-        hora_fin:
-          type: string
-          description: Hora de fin del bloqueo
-          pattern: '^([01]\d|2[0-3]):00:00$'
-          example: "12:00:00"
-        motivo:
-          type: string
-          description: Motivo del bloqueo
-          example: "Mantenimiento de iluminación"
-
-    BloqueoCreate:
-      type: object
-      required:
-        - id_cancha
-        - fecha
-        - hora_inicio
-        - hora_fin
-        - motivo
-      properties:
-        id_cancha:
-          type: integer
-          description: Identificador de la cancha a bloquear
-          example: 2
-        fecha:
-          type: string
-          format: date
-          description: Día del bloqueo
-          example: "2026-10-20"
-        hora_inicio:
-          type: string
-          description: Hora de inicio del bloqueo
-          pattern: '^([01]\d|2[0-3]):00:00$'
-          example: "08:00:00"
-        hora_fin:
-          type: string
-          description: Hora de fin del bloqueo
-          pattern: '^([01]\d|2[0-3]):00:00$'
-          example: "12:00:00"
-        motivo:
-          type: string
-          description: Motivo del bloqueo
-          example: "Mantenimiento de iluminación"
-
-    ReservaRecurrenteCreate:
-      type: object
-      required:
-        - id_socio
-        - id_cancha
-        - fecha_hora_inicio
-        - fecha_hora_fin
-        - cantidad_semanas
-      properties:
-        id_socio:
-          type: integer
-          description: Identificador del socio responsable
-          example: 1
-        id_cancha:
-          type: integer
-          description: Identificador de la cancha reservada
-          example: 2
-        fecha_hora_inicio:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Inicio del intervalo de la primera reserva en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T18:00:00.000000-03:00"
-        fecha_hora_fin:
-          type: string
-          format: date-time
-          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}-03:00$'
-          description: Fin del intervalo de la primera reserva en GMT-3 con 6 decimales de precisión
-          example: "2026-10-15T20:00:00.000000-03:00"
-        cantidad_semanas:
-          type: integer
-          description: Cantidad de semanas de la serie, incluyendo la primera
-          minimum: 2
-          maximum: 12
-          example: 4
-
-    Links:
-      type: object
-      description: Enlaces HATEOAS para navegar entre páginas
-      properties:
-        _first:
-          $ref: '#/components/schemas/Link'
-        _prev:
-          $ref: '#/components/schemas/Link'
-        _next:
-          $ref: '#/components/schemas/Link'
-        _last:
-          $ref: '#/components/schemas/Link'
-
-    Link:
-      type: object
-      properties:
-        href:
-          type: string
-          description: URI para navegar a la página indicada
-          example: "http://localhost:5000/canchas?_offset=0&_limit=10"
-
-    Error:
-      type: object
-      properties:
-        code:
-          type: string
-          description: Código alfanumérico del error
-          example: "ERROR_VALIDACION"
-        message:
-          type: string
-          description: Resumen breve del error
-          example: "El cuerpo de la solicitud es inválido"
-        level:
-          type: string
-          description: Nivel del error
-          enum:
-            - info
-            - warning
-            - error
-          example: "error"
-        description:
-          type: string
-          description: Descripción detallada del error
-          example: "El campo 'precio_hora' debe ser un entero mayor a cero"
-
-    Errores:
-      type: object
-      properties:
-        errors:
-          type: array
-          description: Listado de errores
-          items:
-            $ref: '#/components/schemas/Error'
-
-    ErroresConConflictos:
-      allOf:
-        - $ref: '#/components/schemas/Errores'
-        - type: object
-          properties:
-            conflictos:
-              type: array
-              description: Fechas que presentan conflictos en la serie de reservas
-              items:
-                type: string
-                format: date
-              example:
-                - "2026-10-22"
-                - "2026-11-05"
-
-    DeportesListResponse:
-      type: object
-      properties:
-        deportes:
-          type: array
-          items:
-            $ref: '#/components/schemas/Deporte'
-
-    CanchasListResponse:
-      type: object
-      properties:
-        canchas:
-          type: array
-          items:
-            $ref: '#/components/schemas/Cancha'
-        _links:
-          $ref: '#/components/schemas/Links'
-
-    SociosListResponse:
-      type: object
-      properties:
-        socios:
-          type: array
-          items:
-            $ref: '#/components/schemas/Socio'
-        _links:
-          $ref: '#/components/schemas/Links'
-
-    ReservasListResponse:
-      type: object
-      properties:
-        reservas:
-          type: array
-          items:
-            $ref: '#/components/schemas/Reserva'
-        _links:
-          $ref: '#/components/schemas/Links'
-
-    BloqueosListResponse:
-      type: object
-      properties:
-        bloqueos:
-          type: array
-          items:
-            $ref: '#/components/schemas/Bloqueo'
-        _links:
-          $ref: '#/components/schemas/Links'
-
-  parameters:
-    Id:
-      name: id
-      in: path
-      required: true
-      description: Identificador entero positivo del recurso
-      schema:
-        type: integer
-      example: 1
-
-    Limit:
-      name: _limit
-      in: query
-      description: Cantidad máxima de registros por página
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 100
-        default: 10
-      example: 10
-
-    Offset:
-      name: _offset
-      in: query
-      description: Desplazamiento desde el primer registro
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
-      example: 0
-
-    NombreFilter:
-      name: nombre
-      in: query
-      description: Búsqueda parcial e insensible a mayúsculas por nombre
-      schema:
-        type: string
-      example: "Cancha 1"
-
-    IdDeporteFilter:
-      name: id_deporte
-      in: query
-      description: Filtrar por identificador de deporte
-      schema:
-        type: integer
-      example: 1
-
-    TechadaFilter:
-      name: techada
-      in: query
-      description: Filtrar por indicador de cancha techada
-      schema:
-        type: boolean
-      example: true
-
-    ActivaFilter:
-      name: activa
-      in: query
-      description: Filtrar por indicador de cancha activa
-      schema:
-        type: boolean
-      example: true
-
-    ActivoFilter:
-      name: activo
-      in: query
-      description: Filtrar por indicador de socio activo
-      schema:
-        type: boolean
-      example: true
-
-    EstadoFilter:
-      name: estado
-      in: query
-      description: Filtrar por estado de la reserva
-      schema:
-        type: string
-        enum:
-          - confirmada
-          - cancelada
-          - finalizada
-      example: "confirmada"
-
-    IdCanchaFilter:
-      name: id_cancha
-      in: query
-      description: Filtrar por identificador de cancha
-      schema:
-        type: integer
-      example: 2
-
-    IdSocioFilter:
-      name: id_socio
-      in: query
-      description: Filtrar por identificador de socio
-      schema:
-        type: integer
-      example: 1
-
-    FechaDesdeFilter:
-      name: fecha_desde
-      in: query
-      description: Fecha inicial del rango inclusive
-      schema:
-        type: string
-        format: date
-      example: "2026-10-01"
-
-    FechaHastaFilter:
-      name: fecha_hasta
-      in: query
-      description: Fecha final del rango inclusive
-      schema:
-        type: string
-        format: date
-      example: "2026-10-31"
-
-    FechaRequired:
-      name: fecha
-      in: query
-      required: true
-      description: Día para consultar disponibilidad
-      schema:
-        type: string
-        format: date
-      example: "2026-10-15"
-
-    HoraInicioRequired:
-      name: hora_inicio
-      in: query
-      required: true
-      description: Hora de inicio del intervalo
-      schema:
-        type: string
-        pattern: '^([01]\d|2[0-3]):00:00$'
-        example: "18:00:00"
-
-    HoraFinRequired:
-      name: hora_fin
-      in: query
-      required: true
-      description: Hora de fin del intervalo
-      schema:
-        type: string
-        pattern: '^([01]\d|2[0-3]):00:00$'
-        example: "20:00:00"
-
-    FechaBloqueoFilter:
-      name: fecha
-      in: query
-      description: Filtrar bloqueos por día
-      schema:
-        type: string
-        format: date
-      example: "2026-10-20"
-
-  responses:
-    GetDeportesList200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/DeportesListResponse'
-
-    GetCanchasList200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/CanchasListResponse'
-
-    GetCancha200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Cancha'
-
-    GetSociosList200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/SociosListResponse'
-
-    GetSocio200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Socio'
-
-    GetReservasList200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ReservasListResponse'
-
-    GetReserva200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Reserva'
-
-    GetBloqueosList200:
-      description: OK
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/BloqueosListResponse'
-
-    Created:
-      description: Creado
-
-    ReservasRecurrentesConflict:
-      description: Conflicto en la serie de reservas
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErroresConConflictos'
-
-    BadRequest:
-      description: Solicitud inválida
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Errores'
-
-    NotFound:
-      description: Recurso no encontrado
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Errores'
-
-    Conflict:
-      description: Conflicto de negocio
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Errores'
-
-    NoContent:
-      description: Sin contenido
-
-    InternalServerError:
-      description: Error interno del servidor
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Errores'
+================================================================================
+  FIN DEL DOCUMENTO
+================================================================================

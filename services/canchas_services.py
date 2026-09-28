@@ -131,3 +131,58 @@ def obtener_canchas_disponibles_db(
     params.extend([limit, offset])
 
     return execute(query, tuple(params))
+
+def obtener_cancha_por_id_db(cancha_id: int) -> dict[str, Any] | None:
+    query = """
+        SELECT id_cancha AS id, nombre, id_deporte, precio_hora, techada, activa
+        FROM canchas
+        WHERE id_cancha = %s;
+    """
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return None
+    return resultado[0]
+
+
+def actualizar_cancha_db(cancha_id: int, campos: dict[str, Any]) -> int | None:
+    set_clauses = []
+    params = []
+
+    if "nombre" in campos:
+        set_clauses.append("nombre = %s")
+        params.append(campos["nombre"])
+
+    if "precio_hora" in campos:
+        set_clauses.append("precio_hora = %s")
+        params.append(campos["precio_hora"])
+        set_clauses.append("precio_reserva = %s")
+        params.append(campos["precio_hora"])
+
+    if "techada" in campos:
+        set_clauses.append("techada = %s")
+        params.append(campos["techada"])
+
+    if "activa" in campos:
+        set_clauses.append("activa = %s")
+        params.append(campos["activa"])
+
+    if not set_clauses:
+        return 0
+
+    query = f"UPDATE canchas SET {', '.join(set_clauses)} WHERE id_cancha = %s;"
+    params.append(cancha_id)
+
+    return execute(query, tuple(params))
+
+
+def contar_reservas_por_cancha_db(cancha_id: int) -> int | None:
+    query = "SELECT COUNT(*) AS total FROM reservas WHERE id_cancha = %s;"
+    resultado = execute(query, (cancha_id,))
+    if not isinstance(resultado, list) or not resultado:
+        return 0
+    return int(resultado[0]["total"])
+
+
+def eliminar_cancha_db(cancha_id: int) -> int | None:
+    query = "DELETE FROM canchas WHERE id_cancha = %s;"
+    return execute(query, (cancha_id,))

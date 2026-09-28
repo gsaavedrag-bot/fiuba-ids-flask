@@ -137,3 +137,70 @@ def consultar_disponibles_controller():
     if canchas is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la disponibilidad en la base de datos.")
     return jsonify({"canchas": canchas}), 200
+
+def obtener_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+    return jsonify(cancha), 200
+
+
+def actualizar_cancha_controller(cancha_id: int):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return ERRORS["MISSING_REQUIRED_FIELDS"]("El cuerpo JSON no puede estar vacío.")
+
+    cancha_actual = obtener_cancha_por_id_db(cancha_id)
+    if not cancha_actual:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    campos_a_actualizar = {}
+
+    if "nombre" in data:
+        nombre = data["nombre"]
+        if not isinstance(nombre, str) or not nombre.strip():
+            return ERRORS["INVALID_FORMAT"]("El campo 'nombre' debe ser un texto no vacío.")
+        campos_a_actualizar["nombre"] = nombre.strip()
+
+    if "precio_hora" in data:
+        precio = data["precio_hora"]
+        if isinstance(precio, bool) or not isinstance(precio, int) or precio <= 0:
+            return ERRORS["INVALID_FORMAT"]("El campo 'precio_hora' debe ser un entero mayor a cero.")
+        campos_a_actualizar["precio_hora"] = precio
+
+    if "techada" in data:
+        techada = data["techada"]
+        if not isinstance(techada, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'techada' debe ser booleano.")
+        campos_a_actualizar["techada"] = techada
+
+    if "activa" in data:
+        activa = data["activa"]
+        if not isinstance(activa, bool):
+            return ERRORS["INVALID_FORMAT"]("El campo 'activa' debe ser booleano.")
+        campos_a_actualizar["activa"] = activa
+
+    if not campos_a_actualizar:
+        return ERRORS["INVALID_FORMAT"]("No se enviaron campos válidos para actualizar.")
+
+    filas = actualizar_cancha_db(cancha_id, campos_a_actualizar)
+    if filas is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al actualizar la cancha en la base de datos.")
+
+    return "", 204
+
+
+def eliminar_cancha_controller(cancha_id: int):
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
+        return ERRORS["NOT_FOUND"](f"No se encontró la cancha con id {cancha_id}.")
+
+    total_reservas = contar_reservas_por_cancha_db(cancha_id)
+    if total_reservas is not None and total_reservas > 0:
+        return ERRORS["CONFLICT"]("No se puede eliminar la cancha porque posee reservas asociadas. Utilice PATCH para desactivarla.")
+
+    filas = eliminar_cancha_db(cancha_id)
+    if filas is None or filas == 0:
+        return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo eliminar la cancha de la base de datos.")
+
+    return "", 204

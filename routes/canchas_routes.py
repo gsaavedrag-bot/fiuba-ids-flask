@@ -1,16 +1,18 @@
 # routes/canchas_routes.py
 from flask import Blueprint
-# Importamos los controladores que atienden cada ruta
 from controllers.canchas_controllers import (
     listar_canchas_controller,
     crear_cancha_controller,
+    obtener_cancha_controller,
+    actualizar_cancha_controller,
+    eliminar_cancha_controller,
     consultar_disponibles_controller
 )
 
-# Blueprint para agrupar los endpoints de canchas.
+
 canchas_bp = Blueprint('canchas_bp', __name__)
 
-# GET lista las canchas y POST recibe los datos de una nueva cancha.
+@canchas_bp.route('', methods=['GET'])
 @canchas_bp.route('/', methods=['GET'])
 def listar():
     return listar_canchas_controller()
@@ -20,7 +22,20 @@ def listar():
 def crear():
     return crear_cancha_controller()
 
-# Endpoint para consultar canchas libres en un intervalo
+@canchas_bp.route('/<int:cancha_id>', methods=['GET'])
+def obtener(cancha_id):
+    return obtener_cancha_controller(cancha_id)
+
+
+@canchas_bp.route('/<int:cancha_id>', methods=['PATCH'])
+def actualizar(cancha_id):
+    return actualizar_cancha_controller(cancha_id)
+
+
+@canchas_bp.route('/<int:cancha_id>', methods=['DELETE'])
+def eliminar(cancha_id):
+    return eliminar_cancha_controller(cancha_id)
+
 @canchas_bp.route('/disponibles', methods=['GET'])
 def consultar_disponibles():
     return consultar_disponibles_controller()

@@ -11,15 +11,18 @@ from controllers.canchas_controllers import (
 
 canchas_bp = Blueprint('canchas_bp', __name__)
 
+@canchas_bp.route('', methods=['GET'])
 @canchas_bp.route('/', methods=['GET'])
 def listar():
     return listar_canchas_controller()
 
+@canchas_bp.route('', methods=['POST'])
 @canchas_bp.route('/', methods=['POST'])
 def crear():
     return crear_cancha_controller()
 
 @canchas_bp.route('/disponibles', methods=['GET'])
+@canchas_bp.route('/disponibles/', methods=['GET'])
 def consultar_disponibles():
     return consultar_disponibles_controller()
 

@@ -2,7 +2,7 @@
 -- Datos de prueba - Club Deportivo Encuentro
 -- ---------------------------------------------------------------------
 -- Requiere: haber corrido init_db.sql (tablas creadas).
--- Uso:      sudo mysql < datos_sql.sql
+-- Uso:      mysql -u root -p < datos_prueba.sql
 --
 -- El script BORRA las canchas, socios y reservas existentes y vuelve a
 -- cargar estos datos, así siempre se prueba desde el mismo punto de
@@ -22,14 +22,8 @@
 USE club_deportivo;
 
 -- ---------------------------------------------------------------------
--- Deportes (idealmente viven en init_db.sql; INSERT IGNORE evita
--- errores si ya están cargados)
--- ---------------------------------------------------------------------
-INSERT IGNORE INTO deportes (id_deporte, nombre, cantidad_jugadores) VALUES
-    (1, 'Fútbol', 10),
-    (2, 'Tenis', 2),
-    (3, 'Pádel', 4);
-
+-- Deportes precargados por init_db.sql:
+-- 1 = Fútbol 5, 5 = Pádel, 6 = Tenis
 -- ---------------------------------------------------------------------
 -- Limpieza (TRUNCATE además reinicia los AUTO_INCREMENT)
 -- ---------------------------------------------------------------------
@@ -41,23 +35,23 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- ---------------------------------------------------------------------
 -- Canchas (12 en total: con el _limit por defecto de 10 hay 2 páginas)
--- Deportes: 1 = Fútbol, 2 = Tenis, 3 = Pádel
+-- Deportes: 1 = Fútbol 5, 6 = Tenis, 5 = Pádel
 -- Precios en centavos: 1000000 = $10.000,00
--- precio_reserva se omite (queda NULL)
+-- precio_reserva se establece igual a precio_hora
 -- ---------------------------------------------------------------------
-INSERT INTO canchas (id_cancha, nombre, id_deporte, precio_hora, techada, activa) VALUES
-    (1,  'Cancha 1 - Fútbol 5',          1, 1000000, FALSE, TRUE),   -- tiene reservas -> DELETE da 409
-    (2,  'Cancha 2 - Fútbol 5 Techada',  1, 1000000, TRUE,  TRUE),
-    (3,  'Cancha 3 - Fútbol 7',          1, 1500000, FALSE, TRUE),   -- sin reservas
-    (4,  'Cancha 4 - Fútbol 11',         1, 2500000, FALSE, FALSE),  -- INACTIVA, con una reserva vigente
-    (5,  'Tenis 1 - Polvo de ladrillo',  2,  800000, FALSE, TRUE),
-    (6,  'Tenis 2 - Cemento',            2,  700000, FALSE, TRUE),   -- sin reservas
-    (7,  'Tenis 3 - Cubierta',           2,  900000, TRUE,  TRUE),   -- sin reservas
-    (8,  'Tenis 4 - Cemento',            2,  700000, FALSE, FALSE),  -- INACTIVA, sin reservas
-    (9,  'Pádel 1 - Techada',            3,  600000, TRUE,  TRUE),
-    (10, 'Pádel 2 - Techada',            3,  600000, TRUE,  TRUE),   -- sin reservas
-    (11, 'Pádel 3',                      3,  550000, FALSE, TRUE),   -- sin reservas
-    (12, 'Pádel 4',                      3,  550000, FALSE, TRUE);   -- sin reservas -> DELETE da 204
+INSERT INTO canchas (id_cancha, nombre, id_deporte, precio_hora, techada, activa, precio_reserva) VALUES
+    (1,  'Cancha 1 - Fútbol 5',          1, 1000000, FALSE, TRUE, 1000000),   -- tiene reservas -> DELETE da 409
+    (2,  'Cancha 2 - Fútbol 5 Techada',  1, 1000000, TRUE,  TRUE, 1000000),
+    (3,  'Cancha 3 - Fútbol 7',          2, 1500000, FALSE, TRUE, 1500000),   -- sin reservas
+    (4,  'Cancha 4 - Fútbol 11',         3, 2500000, FALSE, FALSE, 2500000),  -- INACTIVA, con una reserva vigente
+    (5,  'Tenis 1 - Polvo de ladrillo',  6,  800000, FALSE, TRUE,  800000),
+    (6,  'Tenis 2 - Cemento',            6,  700000, FALSE, TRUE,  700000),   -- sin reservas
+    (7,  'Tenis 3 - Cubierta',           6,  900000, TRUE,  TRUE,  900000),   -- sin reservas
+    (8,  'Tenis 4 - Cemento',            6,  700000, FALSE, FALSE, 700000),   -- INACTIVA, sin reservas
+    (9,  'Pádel 1 - Techada',            5,  600000, TRUE, TRUE,  600000),
+    (10, 'Pádel 2 - Techada',            5,  600000, TRUE, TRUE,  600000),   -- sin reservas
+    (11, 'Pádel 3',                      5,  550000, FALSE, TRUE,  550000),   -- sin reservas
+    (12, 'Pádel 4',                      5,  550000, FALSE, TRUE,  550000);   -- sin reservas -> DELETE da 204
 
 -- ---------------------------------------------------------------------
 -- Socios (la columna de habilitación se llama 'estado' en la tabla)
@@ -99,7 +93,7 @@ VALUES
     (10, 4, 5, '2026-10-18 11:00:00', '2026-10-18 13:00:00', 'confirmada', 2500000, 5000000);
 
 -- ---------------------------------------------------------------------
--- Verificación rápida (debería dar 3 / 12 / 5 / 10)
+-- Verificación rápida (debería dar 6 / 12 / 5 / 10)
 -- ---------------------------------------------------------------------
 SELECT
     (SELECT COUNT(*) FROM deportes) AS deportes,

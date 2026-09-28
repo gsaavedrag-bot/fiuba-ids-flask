@@ -26,7 +26,7 @@ def ruta_no_encontrada(e):
 
 
 if __name__ == '__main__':
-    port = int(os.getenv('FLASK_PORT', 5000))
+    port = int(os.getenv('FLASK_PORT') or 5000)
     if os.getenv('ENV') == 'dev':
         app.run(debug=True, port=port)
     else:

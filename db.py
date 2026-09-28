@@ -5,11 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 db_config = {
-    'host': os.getenv('MYSQL_HOST', 'localhost'),
-    'port': int(os.getenv('MYSQL_PORT', 3306)),
-    'user': os.getenv('MYSQL_USER', 'root'),
+    'host': os.getenv('MYSQL_HOST') or 'localhost',
+    'port': int(os.getenv('MYSQL_PORT') or 3306),
+    'user': os.getenv('MYSQL_USER') or 'root',
     'password': os.getenv('MYSQL_PASSWORD', ''),
-    'database': os.getenv('MYSQL_DATABASE', 'club_deportivo')
+    'database': os.getenv('MYSQL_DATABASE') or 'club_deportivo'
 }
 
 

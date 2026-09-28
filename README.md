@@ -35,6 +35,8 @@ Trabajo práctico de backend para la materia **"Introducción al Desarrollo de S
 * **Driver:** `mysql-connector-python`
 * **Variables de Entorno:** `python-dotenv`
 
+Para ejecutar el proyecto en otra computadora también se necesita tener instalado y en ejecución un servidor MySQL 8.0 o superior. El cliente de línea de comandos `mysql` se usa para inicializar la base.
+
 ---
 
 ## 📁 Estructura del Proyecto
@@ -66,11 +68,22 @@ Sigue estos pasos en la terminal desde el directorio raíz del proyecto para lev
 
 Clona la plantilla de variables de entorno y edítala con tus credenciales locales de MySQL:
 
+**Linux / macOS:**
 ```bash
 cp .env.example .env
 ```
 
-> **Nota:** No olvides asignar las credenciales correspondientes a tu servidor local de MySQL en el archivo `.env` recién creado. Este archivo está excluido del control de versiones.
+**Windows (PowerShell):**
+```powershell
+Copy-Item .env.example .env
+```
+
+**Windows (CMD):**
+```cmd
+copy .env.example .env
+```
+
+> **Nota:** Revisa `MYSQL_USER` y `MYSQL_PASSWORD` según tu instalación. Los valores iniciales (`localhost`, `3306`, `root` y `club_deportivo`) son solo valores locales de ejemplo. Este archivo está excluido del control de versiones.
 
 ### 2. Crear y Activar el Entorno Virtual
 
@@ -80,15 +93,23 @@ cp .env.example .env
   source .venv/bin/activate
   ```
 
-- **Windows (CMD o PowerShell):**
+- **Windows (CMD):**
   ```cmd
   python -m venv .venv
   .venv\Scripts\activate
   ```
 
+- **Windows (PowerShell):**
+  ```powershell
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  ```
+
+  Si PowerShell bloquea la activación por su política de ejecución, continúa los comandos desde CMD.
+
 ### 3. Instalar Dependencias
 
-Actualiza `pip` e instala los paquetes requeridos:
+Actualiza `pip` e instala las dependencias Python declaradas en `requirements.txt`:
 
 ```bash
 pip install --upgrade pip
@@ -103,6 +124,12 @@ Ejecuta el script SQL para crear la base de datos `club_deportivo`, estructurar 
 mysql -u root -p < init_db.sql
 ```
 
+En PowerShell, puedes cargar el mismo script con:
+
+```powershell
+Get-Content init_db.sql | mysql -u root -p
+```
+
 ### 5. Iniciar la API
 
 Corre el servidor de Flask:
@@ -110,6 +137,8 @@ Corre el servidor de Flask:
 ```bash
 python3 app.py
 ```
+
+En Windows, ejecuta `python app.py`.
 
 El servidor quedará disponible por defecto en: [http://localhost:5000](http://localhost:5000) (o en el puerto definido por `FLASK_PORT` en tu `.env`).
 

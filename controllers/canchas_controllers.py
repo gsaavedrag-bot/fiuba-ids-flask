@@ -169,7 +169,7 @@ def actualizar_cancha_controller(cancha_id: int):
     cancha, error = obtener_cancha_por_id_db(cancha_id)
     if error:
         return ERRORS["INTERNAL_SERVER_ERROR"]("La cancha se actualizó pero no pudo consultarse.")
-    return jsonify(cancha), 200
+    return jsonify(cancha), 204
 
 
 def eliminar_cancha_controller(cancha_id: int):

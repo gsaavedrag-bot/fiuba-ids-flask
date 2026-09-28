@@ -64,17 +64,14 @@ def obtener_canchas_db(
     return _formatear_canchas(execute(query, tuple(parametros)))
 
 
-def obtener_cancha_por_id_db(cancha_id: int) -> tuple[dict | None, str | None]:
-    """Devuelve (cancha, None), (None, 'NOT_FOUND') o (None, 'DB_ERROR')."""
+def obtener_cancha_por_id_db(cancha_id: int) -> dict | None:
     resultado = execute(
         f"SELECT {COLUMNAS_CANCHA} FROM canchas c WHERE c.id_cancha = %s;",
         (cancha_id,)
     )
-    if resultado is None:
-        return None, "DB_ERROR"
     if not resultado:
-        return None, "NOT_FOUND"
-    return _formatear_cancha(resultado[0]), None
+        return None
+    return _formatear_cancha(resultado[0])
 
 
 def crear_cancha_db(datos: dict) -> tuple[int | None, str | None]:

@@ -132,8 +132,8 @@ def crear_cancha_controller():
     if error or not cancha_id:
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo crear la cancha en la base de datos.")
 
-    cancha, error = obtener_cancha_por_id_db(cancha_id)
-    if error:
+    cancha = obtener_cancha_por_id_db(cancha_id)
+    if not cancha:
         return ERRORS["INTERNAL_SERVER_ERROR"]("La cancha se creó pero no pudo consultarse.")
     return jsonify(cancha), 201
 
@@ -154,11 +154,9 @@ def actualizar_cancha_controller(cancha_id: int):
     if mensaje_error:
         return ERRORS["INVALID_FORMAT"](mensaje_error)
 
-    _, error = obtener_cancha_por_id_db(cancha_id)
-    if error == "NOT_FOUND":
+    cancha_actual = obtener_cancha_por_id_db(cancha_id)
+    if not cancha_actual:
         return ERRORS["NOT_FOUND"](f"No existe la cancha con id {cancha_id}.")
-    if error:
-        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la cancha en la base de datos.")
 
     cambios = dict(data)
     if "nombre" in cambios:
@@ -166,18 +164,13 @@ def actualizar_cancha_controller(cancha_id: int):
     if actualizar_cancha_db(cancha_id, cambios) is None:
         return ERRORS["INTERNAL_SERVER_ERROR"]("No se pudo actualizar la cancha.")
 
-    cancha, error = obtener_cancha_por_id_db(cancha_id)
-    if error:
-        return ERRORS["INTERNAL_SERVER_ERROR"]("La cancha se actualizó pero no pudo consultarse.")
-    return jsonify(cancha), 204
+    return "", 204
 
 
 def eliminar_cancha_controller(cancha_id: int):
-    _, error = obtener_cancha_por_id_db(cancha_id)
-    if error == "NOT_FOUND":
+    cancha_actual = obtener_cancha_por_id_db(cancha_id)
+    if not cancha_actual:
         return ERRORS["NOT_FOUND"](f"No existe la cancha con id {cancha_id}.")
-    if error:
-        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar la cancha en la base de datos.")
 
     tiene_reservas = cancha_tiene_reservas_db(cancha_id)
     if tiene_reservas is None:

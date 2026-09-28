@@ -50,6 +50,7 @@ fiuba-ids-flask/
 ├── errors.py              # Respuestas estandarizadas de error según esquema Swagger
 ├── helpers.py             # Funciones utilitarias compartidas
 ├── init_db.sql            # Script de inicialización de tablas y precarga de deportes
+├── datos_prueba.sql       # Datos de prueba para reservas, canchas y socios
 ├── swagger.yaml           # Contrato OpenAPI 3.0 de la API
 ├── requirements.txt       # Dependencias del proyecto
 ├── .env.example           # Plantilla de variables de entorno
@@ -129,6 +130,14 @@ En PowerShell, puedes cargar el mismo script con:
 ```powershell
 Get-Content init_db.sql | mysql -u root -p
 ```
+
+> **Opcional — Cargar datos semilla de prueba:**
+> Si deseas poblar la base con un conjunto completo de canchas, socios y reservas de prueba para validar paginación y escenarios de conflicto, ejecuta a continuación:
+>
+> ```bash
+> mysql -u root -p < datos_prueba.sql
+> ```
+> *(En PowerShell: `Get-Content datos_prueba.sql | mysql -u root -p`)*
 
 ### 5. Iniciar la API
 

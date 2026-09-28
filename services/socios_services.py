@@ -2,10 +2,57 @@
 from typing import Any
 from db import execute
 
-def obtener_todos_los_socios():
-    """Obtiene socios activos y adapta los nombres de columnas para la API."""
-    query = "SELECT id_socio AS id, nombre, email, estado AS activo FROM socios WHERE estado = %s;"
-    return execute(query, (True,))
+def obtener_todos_los_socios(filtros=None, limit=10, offset=0):
+    """Obtiene socios aplicando filtros y paginación."""
+    condiciones = []
+    parametros = []
+
+    if filtros:
+        if "nombre" in filtros:
+            condiciones.append("nombre LIKE %s")
+            parametros.append(f"%{filtros['nombre']}%")
+
+        if "activo" in filtros:
+            condiciones.append("estado = %s")
+            parametros.append(filtros["activo"])
+
+    query = """
+        SELECT id_socio AS id, nombre, email, estado AS activo
+        FROM socios
+    """
+
+    if condiciones:
+        query += " WHERE " + " AND ".join(condiciones)
+
+    query += " ORDER BY id_socio LIMIT %s OFFSET %s;"
+    parametros.extend([limit, offset])
+
+    return execute(query, tuple(parametros))
+
+def contar_socios_db(filtros=None):
+    condiciones = []
+    parametros = []
+
+    if filtros:
+        if "nombre" in filtros:
+            condiciones.append("nombre LIKE %s")
+            parametros.append(f"%{filtros['nombre']}%")
+
+        if "activo" in filtros:
+            condiciones.append("estado = %s")
+            parametros.append(filtros["activo"])
+
+    query = "SELECT COUNT(*) AS total FROM socios"
+
+    if condiciones:
+        query += " WHERE " + " AND ".join(condiciones)
+
+    resultado = execute(query, tuple(parametros))
+
+    if not resultado:
+        return None
+
+    return resultado[0]["total"]
 
 def obtener_socio_por_id_db(socio_id: int) -> dict[str, Any] | None:
     """Busca un socio por su clave primaria id_socio."""

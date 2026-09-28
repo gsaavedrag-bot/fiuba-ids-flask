@@ -3,7 +3,8 @@ from flask import Blueprint
 from controllers.socios_controllers import (
     listar_socios_controller,
     crear_socio_controller,
-    actualizar_socio_controller
+    actualizar_socio_controller,
+    obtener_socio_controller
 )
 
 # Blueprint para agrupar los endpoints de socios
@@ -25,3 +26,8 @@ def crear_socio():
 @socios_bp.route('/<int:socio_id>', methods=['PATCH'])
 def actualizar_socio(socio_id):
     return actualizar_socio_controller(socio_id)
+
+# GET /socios/{id} obtiene el detalle de un socio
+@socios_bp.route('/<int:socio_id>', methods=['GET'])
+def obtener_socio(socio_id):
+    return obtener_socio_controller(socio_id)

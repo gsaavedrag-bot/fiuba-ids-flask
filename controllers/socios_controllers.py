@@ -1,9 +1,15 @@
 # controllers/socios_controllers.py
 from flask import jsonify, request
 from errors import ERRORS
-from helpers import es_email_valido
+from helpers import (
+    es_email_valido,
+    parsear_paginacion,
+    parsear_booleano,
+    build_hateoas_links
+)
 from services.socios_services import (
     obtener_todos_los_socios,
+    contar_socios_db,
     obtener_socio_por_id_db,
     obtener_socio_por_email_db,
     guardar_nuevo_socio,
@@ -12,11 +18,65 @@ from services.socios_services import (
 
 
 def listar_socios_controller():
-    """Devuelve en JSON la lista de socios activos."""
-    socios = obtener_todos_los_socios()
+    try:
+        limit, offset = parsear_paginacion(
+            request.args.get("_limit"),
+            request.args.get("_offset")
+        )
+
+        filtros = {}
+
+        nombre = request.args.get("nombre")
+        if nombre is not None:
+            filtros["nombre"] = nombre
+
+        activo = parsear_booleano(
+            request.args.get("activo"),
+            "activo"
+        )
+        if activo is not None:
+            filtros["activo"] = activo
+
+    except ValueError as error:
+        return ERRORS["INVALID_FORMAT"](str(error))
+
+    total = contar_socios_db(filtros)
+
+    if total is None:
+        return ERRORS["INTERNAL_SERVER_ERROR"](
+            "Error al contar socios en la base de datos."
+        )
+
+    links = build_hateoas_links(
+        request.base_url,
+        limit,
+        offset,
+        total,
+        request.args.to_dict()
+    )
+
+    socios = obtener_todos_los_socios(filtros, limit, offset)
+
     if socios is None:
-        return ERRORS["INTERNAL_SERVER_ERROR"]("Error al consultar socios en la base de datos.")
-    return jsonify({"socios": socios}), 200
+        return ERRORS["INTERNAL_SERVER_ERROR"](
+            "Error al consultar socios en la base de datos."
+        )
+
+    return jsonify({
+        "socios": socios,
+        "_links": links
+    }), 200
+
+
+def obtener_socio_controller(socio_id: int):
+    socio = obtener_socio_por_id_db(socio_id)
+
+    if socio is None:
+        return ERRORS["NOT_FOUND"](
+            f"No se encontró el socio con id {socio_id}."
+        )
+
+    return jsonify(socio), 200
 
 
 def crear_socio_controller():
